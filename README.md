@@ -948,9 +948,9 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
 
 ## License
 
-Internal use only — B. Riley Financial.  
+Internal use only
 Not for distribution outside the organisation.
 
 ---
 
-*ThreatOS — Built by Naveen, IT Infrastructure, April 2026*
+*ThreatOS — Built by IT Infrastructure, April 2026*
