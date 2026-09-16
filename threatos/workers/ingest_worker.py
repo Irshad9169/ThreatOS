@@ -168,7 +168,7 @@ async def run_worker() -> None:
     signal.signal(signal.SIGINT,  _handle_signal)
     log.info("ThreatOS ingest worker starting")
     await _load_rules()
-    redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    redis = aioredis.from_url(settings.redis_url, decode_responses=True, protocol=2)
     cache = _CriticalityCache(redis)
     try:
         await redis.xgroup_create(

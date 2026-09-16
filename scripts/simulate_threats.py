@@ -212,7 +212,7 @@ def main():
             print(f"  {key:<35} {s['name']}")
         return
 
-    r = redis.from_url(REDIS_URL, decode_responses=True)
+    r = redis.from_url(REDIS_URL, decode_responses=True, protocol=2)
     r.ping()
     print(f"Connected to Redis. Stream: {STREAM_NAME}")
     print(f"Target host: {args.host}\n")

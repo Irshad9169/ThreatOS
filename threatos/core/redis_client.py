@@ -18,6 +18,7 @@ def _make_client() -> aioredis.Redis:
         settings.redis_url, decode_responses=True,
         retry=retry, retry_on_timeout=True,
         socket_connect_timeout=5, socket_timeout=5,
+        protocol=2,  # force RESP2 — this deployment's Redis predates HELLO/RESP3 (Redis 6.0+)
     )
 
 @lru_cache(maxsize=1)
