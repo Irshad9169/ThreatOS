@@ -234,13 +234,6 @@ async def test_update_status_changes_to_investigating(db_session):
     assert updated is not None
     assert updated.status == "investigating"
 
-@pytest.mark.skip(reason="suspected production bug: update_alert_status() in "
-                          "threatos/services/alert_service.py never sets closed_at "
-                          "for any status transition, even though Alert.closed_at "
-                          "exists specifically for this purpose and the /alerts API "
-                          "route response includes it (see threatos/tests/integration/"
-                          "test_alerts_route.py::test_update_status_closed_sets_closed_at). "
-                          "Needs human review before fixing update_alert_status().")
 @pytest.mark.asyncio
 async def test_update_status_sets_closed_at_when_closed(db_session):
     alert = await persist_alert(db_session, _alert_dict())
@@ -248,13 +241,6 @@ async def test_update_status_sets_closed_at_when_closed(db_session):
     updated = await update_alert_status(db_session, alert.id, "closed")
     assert updated.closed_at is not None
 
-@pytest.mark.skip(reason="suspected production bug: update_alert_status() in "
-                          "threatos/services/alert_service.py never sets closed_at "
-                          "for any status transition, even though Alert.closed_at "
-                          "exists specifically for this purpose and the /alerts API "
-                          "route response includes it (see threatos/tests/integration/"
-                          "test_alerts_route.py::test_update_status_closed_sets_closed_at). "
-                          "Needs human review before fixing update_alert_status().")
 @pytest.mark.asyncio
 async def test_update_status_sets_closed_at_for_false_positive(db_session):
     alert = await persist_alert(db_session, _alert_dict())

@@ -280,14 +280,6 @@ async def test_update_status_reflects_new_status(
     assert resp.json()["status"] == "investigating"
 
 
-@pytest.mark.skip(
-    reason="suspected production bug: Alert.closed_at column exists "
-           "(threatos/models/alert.py) but update_alert_status() in "
-           "threatos/services/alert_service.py never sets it when "
-           "transitioning to 'closed', and the PUT /api/alerts/{id}/status "
-           "response in alerts_router.py doesn't return it either — closing "
-           "an alert leaves closed_at permanently null."
-)
 @pytest.mark.asyncio
 async def test_update_status_closed_sets_closed_at(
     test_client: AsyncClient, db_session

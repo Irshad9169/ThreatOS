@@ -1,17 +1,21 @@
 from __future__ import annotations
+import re
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from threatos.core.database import get_db
 from threatos.core.dependencies import get_current_user, require_engineer
+from threatos.detection.rule_ast import node_from_dict
 from threatos.models.detection_rule import DetectionRule
 from threatos.models.user import User
 from threatos.services.audit_service import Action, Resource, audit
 
 router = APIRouter()
+
+TECHNIQUE_ID_RE = re.compile(r"^T\d{4}(\.\d{3})?$")
 
 class RuleIn(BaseModel):
     name: str; technique_id: str; tactic: str
@@ -21,6 +25,22 @@ class RuleIn(BaseModel):
     log_sources: list[str] = []; platforms: list[str] = []
     tags: list[str] = []; enabled: bool = True
     description: str | None = None; author: str | None = None
+
+    @field_validator("technique_id")
+    @classmethod
+    def validate_technique_id(cls, v):
+        if not TECHNIQUE_ID_RE.match(v):
+            raise ValueError(f"technique_id must match ATT&CK format (e.g. T1059.001), got {v!r}")
+        return v
+
+    @field_validator("detection_ast")
+    @classmethod
+    def validate_detection_ast(cls, v):
+        try:
+            node_from_dict(v)
+        except (ValueError, KeyError) as exc:
+            raise ValueError(f"invalid detection_ast: {exc}")
+        return v
 
 def _out(r: DetectionRule) -> dict:
     return {"id": str(r.id), "name": r.name, "technique_id": r.technique_id,
@@ -36,6 +56,18 @@ async def list_rules(
 ):
     result = await db.execute(select(DetectionRule).order_by(DetectionRule.name))
     return [_out(r) for r in result.scalars().all()]
+
+@router.get("/{rule_id}")
+async def get_rule(
+    rule_id: str,
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(DetectionRule).where(DetectionRule.id == rule_id))
+    rule = result.scalar_one_or_none()
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    return _out(rule)
 
 @router.post("", status_code=201)
 async def create_rule(

@@ -32,6 +32,13 @@ def _fingerprint(data: dict) -> str:
     stable = json.dumps(data, sort_keys=True, default=str)
     return hashlib.sha256(stable.encode()).hexdigest()
 
+def _coerce_port(v: Any) -> int | None:
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str) and v.isdigit():
+        return int(v)
+    return None
+
 def normalize_json(raw: dict) -> NormalizedEvent:
     event_id = raw.get("event_id") or raw.get("id") or str(uuid.uuid4())
     e = NormalizedEvent(
@@ -44,7 +51,7 @@ def normalize_json(raw: dict) -> NormalizedEvent:
         parent_process=raw.get("parent_process"),
         src_ip=raw.get("src_ip") or raw.get("source_ip"),
         dst_ip=raw.get("dst_ip") or raw.get("dest_ip"),
-        dst_port=raw.get("dst_port") or raw.get("dest_port"),
+        dst_port=_coerce_port(raw.get("dst_port") or raw.get("dest_port")),
         file_path=raw.get("file_path"),
         file_hash=raw.get("file_hash") or raw.get("md5") or raw.get("sha256"),
         logon_type=raw.get("logon_type"),
@@ -72,6 +79,7 @@ def normalize_cef(raw_line: str) -> NormalizedEvent:
         dst_ip=ext.get("dst"),
         dst_port=int(ext["dpt"]) if ext.get("dpt","").isdigit() else None,
         file_path=ext.get("filePath"),
+        file_hash=ext.get("fileHash") or ext.get("md5") or ext.get("sha256"),
         raw_fields=ext,
     )
     e.hash = _fingerprint(ext)
@@ -85,10 +93,12 @@ def normalize_winlog(raw: dict) -> NormalizedEvent:
         log_source="winlog",
         host=raw.get("host") or raw.get("computer_name"),
         user=data.get("SubjectUserName") or data.get("TargetUserName"),
-        process=data.get("NewProcessName") or data.get("ProcessName"),
-        command_line=data.get("CommandLine"),
-        parent_process=data.get("ParentProcessName"),
+        process=data.get("NewProcessName") or data.get("ProcessName") or raw.get("Image"),
+        command_line=data.get("CommandLine") or raw.get("CommandLine"),
+        parent_process=data.get("ParentProcessName") or raw.get("ParentImage"),
         src_ip=data.get("IpAddress"),
+        dst_ip=data.get("DestinationIp"),
+        dst_port=_coerce_port(data.get("DestinationPort")),
         logon_type=str(data["LogonType"]) if data.get("LogonType") else None,
         raw_fields=raw,
     )

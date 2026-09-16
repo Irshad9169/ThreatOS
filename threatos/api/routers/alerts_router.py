@@ -68,4 +68,5 @@ async def set_alert_status(
                 detail=f"'{current_user.username}' changed alert status: {old_status} → {new_status}",
                 changes={"status": {"from": old_status, "to": new_status}},
                 request=request)
-    return {"id": str(alert.id), "status": alert.status}
+    return {"id": str(alert.id), "status": alert.status,
+            "closed_at": alert.closed_at.isoformat() if alert.closed_at else None}

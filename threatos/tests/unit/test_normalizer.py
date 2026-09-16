@@ -61,26 +61,10 @@ def test_json_file_hash_fallback_keys():
     event = normalize_event({"md5": "d41d8cd98f00b204e9800998ecf8427e"}, "json")
     assert event.file_hash == "d41d8cd98f00b204e9800998ecf8427e"
 
-@pytest.mark.skip(reason=(
-    "suspected production bug: normalize_json() does not coerce a string "
-    "dst_port to int (threatos/ingestion/normalizer.py:47 — "
-    "`dst_port=raw.get('dst_port') or raw.get('dest_port')`, no int()/isdigit() "
-    "guard). This is inconsistent with normalize_cef() (line 73) and "
-    "workers/ingest_worker.py:80, which both do "
-    "`int(x) if x.isdigit() else None`. A numeric-string dst_port from a JSON "
-    "source is stored as the raw string, violating the `int | None` type "
-    "contract on NormalizedEvent.dst_port."
-))
 def test_json_port_as_string_coerced_to_int():
     event = normalize_event({"dst_port": "8080"}, "json")
     assert event.dst_port == 8080
 
-@pytest.mark.skip(reason=(
-    "suspected production bug: see test_json_port_as_string_coerced_to_int — "
-    "normalize_json() has no dst_port validation at all "
-    "(threatos/ingestion/normalizer.py:47), so a non-numeric dst_port string "
-    "is stored as-is instead of becoming None."
-))
 def test_json_invalid_port_returns_none():
     event = normalize_event({"dst_port": "not-a-port"}, "json")
     assert event.dst_port is None
@@ -147,14 +131,6 @@ def test_cef_standard_fields():
     assert event.host     == "victim-pc"
     assert event.process  == "nc.exe"
 
-@pytest.mark.skip(reason=(
-    "suspected production bug: normalize_cef() (threatos/ingestion/"
-    "normalizer.py:65-78) never assigns file_hash from the parsed CEF "
-    "extension fields at all — there is no `file_hash=ext.get(...)` in its "
-    "NormalizedEvent(...) call, unlike normalize_json() which supports "
-    "file_hash/md5/sha256. A CEF event's fileHash extension field (a common "
-    "convention) is silently discarded."
-))
 def test_cef_file_fields():
     line = ("CEF:0|Vendor|Product|1.0|100|File Test|3|"
             "filePath=/tmp/malware.sh fileHash=abc123")
@@ -185,15 +161,6 @@ def test_winlog_flat_fields():
     assert "whoami"  in event.command_line
     assert "explorer.exe" in event.parent_process
 
-@pytest.mark.skip(reason=(
-    "suspected production bug/gap: normalize_winlog() only maps src_ip from "
-    "event_data['IpAddress'] (threatos/ingestion/normalizer.py:91) — it never "
-    "reads a destination IP/port from the winlog event_data at all, so "
-    "dst_ip/dst_port are always None for winlog-sourced events even when the "
-    "raw payload has destination-network fields. This silently drops "
-    "destination-IOC data for the winlog ingest path (relevant e.g. for RDP "
-    "brute-force / lateral-movement detections)."
-))
 def test_winlog_network_fields():
     event = normalize_event({
         "computer_name": "WORKSTATION-01",
@@ -211,15 +178,6 @@ def test_winlog_logon_type_as_string():
     event = normalize_event({"event_data": {"LogonType": 3}}, "winlog")
     assert event.logon_type == "3"
 
-@pytest.mark.skip(reason=(
-    "suspected production bug/gap: normalize_winlog() only reads process / "
-    "command_line / parent_process out of raw['event_data'] "
-    "(threatos/ingestion/normalizer.py:87-90) with no top-level flat fallback "
-    "— unlike host, which does fall back to raw['computer_name']. A payload "
-    "without an 'event_data' wrapper silently loses process/command_line "
-    "info even though host is still extracted, which is an inconsistent "
-    "(and likely unintended) gap between the two lookups."
-))
 def test_winlog_flat_payload_no_eventdata_key():
     """Payloads without an event_data key should still work."""
     event = normalize_event({

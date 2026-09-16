@@ -45,23 +45,45 @@ def evaluate_ast(node: Any, event: dict[str, Any]) -> bool:
 
 def _eval_field(node: FieldMatch, event: dict) -> bool:
     val = event.get(node.field)
-    if val is None:
-        return node.operator in ("not_exists", "is_null")
+    present = val is not None and val != ""
+    op = node.operator
+    if op == "exists":     return present
+    if op == "not_exists": return not present
+    if op == "is_null":    return val is None
+    if not present:
+        return False
     val_s = str(val).lower()
     cmp_s = str(node.value).lower() if node.value is not None else ""
-    op = node.operator
     if op == "equals":          return val_s == cmp_s
     if op == "not_equals":      return val_s != cmp_s
     if op == "contains":        return cmp_s in val_s
     if op == "not_contains":    return cmp_s not in val_s
     if op == "starts_with":     return val_s.startswith(cmp_s)
     if op == "ends_with":       return val_s.endswith(cmp_s)
+    if op == "in":
+        try:
+            return val_s in [str(v).lower() for v in node.value]
+        except TypeError:
+            return False
+    if op == "not_in":
+        try:
+            return val_s not in [str(v).lower() for v in node.value]
+        except TypeError:
+            return True
     if op == "regex":
         import re
-        return bool(re.search(node.value, str(val), re.IGNORECASE))
-    if op == "exists":          return True
-    if op == "not_exists":      return False
-    if op == "gt":              return float(val) > float(node.value)
-    if op == "lt":              return float(val) < float(node.value)
-    if op == "is_null":         return False
+        try:
+            return bool(re.search(str(node.value), str(val), re.IGNORECASE))
+        except re.error:
+            return False
+    if op == "gt":
+        try:
+            return float(val) > float(node.value)
+        except (TypeError, ValueError):
+            return False
+    if op == "lt":
+        try:
+            return float(val) < float(node.value)
+        except (TypeError, ValueError):
+            return False
     return False

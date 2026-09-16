@@ -125,11 +125,6 @@ async def test_list_rules_returns_disabled_rules_too(test_client: AsyncClient):
 # gap (worth flagging for human review) rather than pure test/API-shape
 # drift, since every other resource in this API exposes a get-by-id route.
 
-@pytest.mark.skip(
-    reason="suspected production gap: GET /api/rules/{rule_id} does not "
-           "exist in threatos/api/routers/rules_router.py — no single-rule "
-           "fetch route is registered (list/create/toggle only)."
-)
 @pytest.mark.asyncio
 async def test_get_rule_by_id(test_client: AsyncClient):
     create_resp = await test_client.post("/api/rules", json=VALID_RULE)
@@ -139,10 +134,6 @@ async def test_get_rule_by_id(test_client: AsyncClient):
     assert resp.status_code == 200
     assert resp.json()["id"] == rule_id
 
-@pytest.mark.skip(
-    reason="suspected production gap: GET /api/rules/{rule_id} does not "
-           "exist in threatos/api/routers/rules_router.py."
-)
 @pytest.mark.asyncio
 async def test_get_rule_404_on_missing(test_client: AsyncClient):
     import uuid
@@ -175,14 +166,6 @@ async def test_create_rule_response_shape(test_client: AsyncClient):
     assert rule["enabled"]      is True
     assert rule["trigger_count"]== 0
 
-@pytest.mark.skip(
-    reason="suspected production bug: RuleIn.technique_id (rules_router.py) "
-           "is a plain `str` with no format validation, so a malformed "
-           "technique_id like 'INVALID' is accepted and persisted — it will "
-           "silently never match anything in the ATT&CK coverage matrix "
-           "(threatos/services/coverage_service.py keys off real ATT&CK "
-           "technique ids)."
-)
 @pytest.mark.asyncio
 async def test_create_rule_invalid_technique_id_returns_422(
     test_client: AsyncClient,
@@ -191,16 +174,6 @@ async def test_create_rule_invalid_technique_id_returns_422(
     resp = await test_client.post("/api/rules", json=bad_rule)
     assert resp.status_code == 422   # Pydantic validation error
 
-@pytest.mark.skip(
-    reason="suspected production bug: create_rule() (rules_router.py) never "
-           "validates detection_ast against threatos/detection/rule_ast.py "
-           "(node_from_dict) before persisting — a malformed AST like "
-           "{'type': 'totally_wrong'} is accepted with 201, and only fails "
-           "silently later when threatos.detection.rule_engine."
-           "load_rules_into_engine() tries to compile it (caught, logged, "
-           "and the rule is just dropped from the live engine — it never "
-           "fires and the user is never told)."
-)
 @pytest.mark.asyncio
 async def test_create_rule_invalid_ast_returns_422(test_client: AsyncClient):
     bad_rule = {**VALID_RULE, "detection_ast": {"type": "totally_wrong"}}

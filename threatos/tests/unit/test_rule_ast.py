@@ -92,15 +92,6 @@ def test_regex_match():
     assert evaluate_ast(n, {"file_path": "C:\\Temp\\abc123.exe"}) is True
     assert evaluate_ast(n, {"file_path": "C:\\Windows\\system32\\svchost.exe"}) is False
 
-@pytest.mark.skip(reason=(
-    "suspected production bug: _eval_field()'s regex branch "
-    "(threatos/detection/rule_ast.py:59-61) calls re.search(node.value, ...) with "
-    "no try/except around it. A malformed regex pattern raises "
-    "re.PatternError instead of evaluating to False, so evaluate_ast() (and any "
-    "code calling it outside of rule_engine.evaluate_event's own broad "
-    "try/except) will crash on a rule with an invalid regex, instead of the "
-    "rule simply not matching."
-))
 def test_regex_invalid_pattern_returns_false():
     n = FieldMatch(field="process", operator="regex", value="[invalid(")
     assert evaluate_ast(n, {"process": "anything"}) is False
@@ -111,39 +102,15 @@ def test_regex_case_insensitive_by_default():
 
 
 # ── FieldMatch: in / not_in ────────────────────────────────────────────────────
-# NOTE: current rule_ast.py's _eval_field() has no "in"/"not_in" branch at all —
-# any operator it doesn't recognize falls through to `return False` at the
-# bottom of the function. That means a detection rule authored with an "in"
-# operator (e.g. "dst_port in [4444, 4445, 9001]") will *silently never match*
-# rather than raising an error or doing set membership — a real, dangerous
-# silent-detection-gap bug for a SIEM. Keeping these skipped/documented rather
-# than deleted so the gap stays visible.
 
-@pytest.mark.skip(reason=(
-    "suspected production bug: rule_ast.py's _eval_field() has no 'in' operator "
-    "branch (threatos/detection/rule_ast.py:53-66); unrecognized operators fall "
-    "through to `return False`. A rule using operator='in' will silently never "
-    "match instead of doing set-membership, which is a silent detection gap."
-))
 def test_in_value_present():
     n = FieldMatch(field="dst_port", operator="in", value=[4444, 4445, 9001])
     assert evaluate_ast(n, {"dst_port": "4444"}) is True
 
-@pytest.mark.skip(reason=(
-    "suspected production bug: see test_in_value_present — 'in' operator is "
-    "unimplemented in rule_ast.py's _eval_field()."
-))
 def test_in_value_absent():
     n = FieldMatch(field="dst_port", operator="in", value=[4444, 4445])
     assert evaluate_ast(n, {"dst_port": "80"}) is False
 
-@pytest.mark.skip(reason=(
-    "suspected production bug: 'not_in' is likewise unimplemented in "
-    "rule_ast.py's _eval_field() (threatos/detection/rule_ast.py:53-66) — it "
-    "falls through to `return False` for both present and absent values, so a "
-    "not_in rule can never fire (it's supposed to fire when the value is "
-    "absent from the list)."
-))
 def test_not_in():
     n = FieldMatch(field="process", operator="not_in",
                    value=["svchost.exe", "explorer.exe"])
@@ -163,14 +130,6 @@ def test_lt_numeric():
     assert evaluate_ast(n, {"dst_port": "80"}) is True
     assert evaluate_ast(n, {"dst_port": "8080"}) is False
 
-@pytest.mark.skip(reason=(
-    "suspected production bug: _eval_field()'s gt/lt branches "
-    "(threatos/detection/rule_ast.py:64-65) call float(val)/float(node.value) "
-    "with no try/except. A non-numeric field value raises ValueError instead "
-    "of evaluating to False, so a gt/lt rule crashes (within rule_engine it's "
-    "swallowed per-rule and just fails to fire, but evaluate_ast() itself "
-    "propagates the exception to any other caller)."
-))
 def test_gt_non_numeric_returns_false():
     n = FieldMatch(field="process", operator="gt", value=5)
     assert evaluate_ast(n, {"process": "not-a-number"}) is False
@@ -186,14 +145,6 @@ def test_exists_field_absent():
     n = FieldMatch(field="process", operator="exists")
     assert evaluate_ast(n, {"command_line": "something"}) is False
 
-@pytest.mark.skip(reason=(
-    "suspected production bug: _eval_field() (threatos/detection/rule_ast.py:62) "
-    "treats operator=='exists' as unconditionally True once the field key is "
-    "present and non-None — it never checks for an empty string. So a field "
-    "present with value '' is reported as 'exists', which contradicts the "
-    "intended semantics (and the historical behavior) of exists meaning "
-    "'meaningfully populated'."
-))
 def test_exists_empty_string_is_not_present():
     n = FieldMatch(field="process", operator="exists")
     assert evaluate_ast(n, {"process": ""}) is False

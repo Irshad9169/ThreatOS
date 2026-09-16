@@ -66,9 +66,12 @@ async def get_alert_by_id(db: AsyncSession, alert_id: str) -> Alert | None:
 async def update_alert_status(db: AsyncSession, alert_id: str, new_status: str) -> Alert | None:
     if new_status not in VALID_STATUSES:
         raise ValueError(f"Invalid status: {new_status!r}")
+    values: dict[str, Any] = {"status": new_status, "updated_at": datetime.now(UTC)}
+    if new_status in ("closed", "false_positive"):
+        values["closed_at"] = datetime.now(UTC)
     result = await db.execute(
         update(Alert).where(Alert.id == str(alert_id))
-        .values(status=new_status, updated_at=datetime.now(UTC))
+        .values(**values)
         .returning(Alert)
     )
     return result.scalar_one_or_none()
