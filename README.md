@@ -6,7 +6,7 @@ ThreatOS is a full-stack Security Information and Event Management (SIEM) platfo
 
 ```
 Status:   Production (internal network)
-Server:   test06.hyd.int.untd.com
+Server:   test machine
 Version:  0.1.0
 Coverage: 100% MITRE ATT&CK (697/697 techniques)
 Rules:    3,044 (SigmaHQ + custom)
