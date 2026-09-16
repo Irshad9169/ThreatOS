@@ -6,6 +6,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from threatos.models.base import Base
 from threatos.models.raw_event import JSONBCompat
 
+VALID_STATUSES = ("open", "investigating", "escalated", "closed", "false_positive")
+
 class Alert(Base):
     __tablename__ = "alerts"
     id:                Mapped[str]       = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
