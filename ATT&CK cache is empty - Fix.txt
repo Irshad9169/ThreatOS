@@ -1,0 +1,20 @@
+# On test06
+TOKEN=$(curl -s -X POST http://localhost:8001/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"<REDACTED_PASSWORD>"}' | \
+  python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")
+
+# Reload ATT&CK bundle
+curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8001/api/coverage/refresh | python3 -c "
+import json,sys; d=json.load(sys.stdin)
+print(f'Coverage: {d[\"coverage_pct\"]}%  ({d[\"covered\"]}/{d[\"total_techniques\"]})')
+"
+
+# Verify health now shows 691
+curl -s http://localhost:8001/health | python3 -c "
+import json,sys; d=json.load(sys.stdin)
+print(f'Rules:  {d[\"rules_loaded\"]}')
+print(f'ATT&CK: {d[\"attck_techniques\"]} techniques')
+print(f'Status: {d[\"status\"]}')
+"

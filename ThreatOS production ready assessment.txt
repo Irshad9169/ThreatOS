@@ -1,0 +1,101 @@
+Here's an honest assessment of what's left and how production-ready ThreatOS is right now:
+
+Current State — What's Done
+✅ Authentication          JWT + refresh tokens + blacklist + rate limiting
+✅ User management         Roles, sessions, API keys
+✅ Audit logging           Hash-chained tamper detection, all actions tracked
+✅ Detection pipeline      2,662 rules, ATT&CK coverage, alert suppression
+✅ Detection quality       FP tracking, rule metrics, dry-run testing, dedup
+✅ Observability           Prometheus /metrics, health checks, structured logging
+✅ Compliance              Session management, rule change workflow
+✅ Data retention          Automated cleanup per policy
+✅ Crash recovery          XAUTOCLAIM for worker crash recovery
+✅ Input sanitisation      Size limits, injection prevention, field validation
+✅ Connection pooling      SQLAlchemy production pool config
+✅ Reports                 PDF export, weekly summary
+✅ Event search            Full-text search across raw events
+✅ Health dashboard        Live component status, health alerts
+
+What's Still Missing — Prioritised
+Must Do Before Production Use
+1. HTTPS
+Every credential travels in plaintext right now. Request a certificate from your IT team for test06.hyd.int.untd.com. Once you have the cert files:
+bash# Add to nginx config — 2 lines
+ssl_certificate     /etc/ssl/threatos/server.crt;
+ssl_certificate_key /etc/ssl/threatos/server.key;
+
+
+2. Backup
+Zero backup exists. If the disk fails everything is gone — 2,662 rules, all audit logs, all alerts.
+bash# Add this cron job right now — takes 30 seconds
+mkdir -p /backup/threatos
+cat > /etc/cron.d/threatos-backup << 'EOF'
+0 1 * * * root pg_dump -h localhost -U threatos threatos | \
+  gzip > /backup/threatos/db_$(date +\%Y\%m\%d).sql.gz && \
+  find /backup/threatos -name "*.sql.gz" -mtime +7 -delete
+EOF
+
+3. Firewall rules
+Port 8001 (API) should not be publicly accessible — only port 8080 (nginx) should be open. The API port exposes the raw FastAPI including /metrics and /health without any network-level protection.
+bashsudo firewall-cmd --permanent --add-port=8080/tcp
+sudo firewall-cmd --permanent --remove-port=8001/tcp
+sudo firewall-cmd --reload
+
+Should Do Within First Month
+4. Real log source connectors
+Currently you manually push events to Redis. Without real log sources, ThreatOS has no data to detect against. Options in order of effort:
+ConnectorEffortWhat it doesSyslog receiverLowLinux servers send syslog directly to ThreatOSWEF forwarderMediumWindows Event Forwarding to ThreatOSFilebeat/Elastic AgentLowForward existing Elastic logs to Redis streamDirect script on each serverLowCron job ships events via API key
+The simplest approach for your environment — a Python agent on each server that reads Windows Event Log or syslog and POSTs to /api/ingest/event using an API key.
+
+5. Prometheus + Grafana
+Already designed, just needs a machine with disk space. The /metrics endpoint is live and ready to scrape.
+6. Alert notifications
+High-risk alerts fire silently. No one knows unless they check the UI. Need email or Teams/Slack webhook:
+python# When risk_score > 70 → POST to webhook
+# Already have all the data — just need the delivery mechanism
+7. Register your real servers as assets
+Currently only test hosts are registered. Criticality multipliers only work on registered hosts. Every real server should be registered with correct criticality so risk scores are meaningful.
+
+Nice to Have
+8. SOAR playbook stubs
+For critical alerts (risk > 90, multi-stage chain), trigger automated response — isolate host, block IP, disable account. The audit log already captures everything needed for forensics.
+9. Threat intelligence enrichment
+Enrich alerts with external context — VirusTotal for file hashes, AbuseIPDB for IPs. Turns a raw alert into an actionable finding.
+10. Multi-server deployment
+Right now everything runs on one server. For true production resilience: separate the API, worker, and database onto different hosts with a load balancer in front.
+
+Recommended Next Steps in Order
+This week:
+  1. Set up the backup cron job (5 minutes)
+  2. Request HTTPS cert from IT team
+  3. Add firewall rules to block port 8001 externally
+  4. Register all your real servers as assets
+
+Next week:
+  5. Set up Prometheus + Grafana on a separate machine ---------- ✅Done
+  6. Connect one real log source (start with syslog from one Linux server)
+  7. Set up alert notifications (Teams webhook)
+
+This month:
+  8. Connect Windows Event Forwarding
+  9. Run purple team validations on all critical techniques
+  10. Review and tune noisy rules (GET /api/detection/noisy-rules)
+
+The Backup — Do This Right Now
+This is the single most important thing. Everything else can wait:
+bash# Create backup directory
+mkdir -p /backup/threatos
+
+# Test backup works
+pg_dump -h localhost -U threatos threatos | \
+  gzip > /backup/threatos/db_$(date +%Y%m%d).sql.gz
+
+ls -lh /backup/threatos/
+
+# Add daily cron
+cat > /etc/cron.d/threatos-backup << 'EOF'
+0 1 * * * root PGPASSWORD=threatos_secret pg_dump -h localhost -U threatos threatos | gzip > /backup/threatos/db_$(date +\%Y\%m\%d).sql.gz && find /backup/threatos -name "*.sql.gz" -mtime +7 -delete
+EOF
+
+echo "Backup configured"
+Want me to build the alert notification webhook (Teams/Slack) or the syslog receiver next? Both are small and immediately useful.

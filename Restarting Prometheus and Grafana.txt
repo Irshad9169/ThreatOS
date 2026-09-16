@@ -1,0 +1,113 @@
+cd /fs/untd-1/threatos-monitoring
+
+# sanity check the binaries actually exist here
+ls -la prometheus/prometheus grafana/bin/grafana
+
+If that ls shows the files, proceed:
+
+
+pkill -f "prometheus --config" 2>/dev/null
+pkill -f "grafana server" 2>/dev/null
+sleep 2
+
+nohup ./prometheus/prometheus \
+  --config.file=prometheus/prometheus.yml \
+  --storage.tsdb.path=prometheus/data \
+  --web.listen-address=0.0.0.0:9090 \
+  > /fs/untd-1/threatos-monitoring/prometheus.log 2>&1 &
+echo "Prometheus PID: $!"
+
+nohup ./grafana/bin/grafana server \
+  --homepath ./grafana \
+  --config ./grafana/conf/defaults.ini \
+  > /fs/untd-1/threatos-monitoring/grafana.log 2>&1 &
+echo "Grafana PID: $!"
+
+sleep 5
+curl -s http://localhost:9090/-/ready && echo " — Prometheus ready"
+curl -s http://localhost:3000/api/health
+
+If the ls -la above comes back empty or "No such file or directory," then the install actually lives somewhere else (or under a different name) and we need to locate it first — run:
+
+
+find /fs/untd-1 -maxdepth 3 -iname "prometheus" -o -iname "grafana" 2>/dev/null
+
+and paste the output so I can give you the correct paths.
+
+Tip to avoid this in future: since nohup ... & runs in the background instantly, the shell doesn't wait to tell you if the command itself failed to even start — that's why you got a PID printed (868671) but then saw Exit 127 a moment later. Exit code 127 = "command not found," which is the giveaway it's a path issue, not a crash.
+
+
+
+
+
+
+
+============================================
+Terminal output
+
+
+[root@test05 ~]# cd /fs/untd-1/threatos-monitoring
+[root@test05 threatos-monitoring]# ls -la prometheus/prometheus grafana/bin/grafana
+-rwxr-xr-x 1 root root 198233512 Mar 20  2024 grafana/bin/grafana
+-rwxr-xr-x 1 1001  127 133601276 Mar 19  2024 prometheus/prometheus
+[root@test05 threatos-monitoring]# pkill -f "prometheus --config" 2>/dev/null
+pkill -f "grafana server" 2>/dev/null
+sleep 2
+
+nohup ./prometheus/prometheus \
+  --config.file=prometheus/prometheus.yml \
+  --storage.tsdb.path=prometheus/data \
+  --web.listen-address=0.0.0.0:9090 \
+  > /fs/untd-1/threatos-monitoring/prometheus.log 2>&1 &
+echo "Prometheus PID: $!"
+
+nohup ./grafana/bin/grafana server \
+  --homepath ./grafana \
+  --config ./grafana/conf/defaults.ini \
+  > /fs/untd-1/threatos-monitoring/grafana.log 2>&1 &
+echo "Grafana PID: $!"
+
+sleep 5
+curl -s http://localhost:9090/-/ready && echo " — Prometheus ready"
+curl -s http://localhost:3000/api/health[root@test05 threatos-monitoring]# pkill -f "grafana server" 2>/dev/null
+[root@test05 threatos-monitoring]# sleep 2
+[root@test05 threatos-monitoring]#
+[root@test05 threatos-monitoring]# nohup ./prometheus/prometheus \
+>   --config.file=prometheus/prometheus.yml \
+>   --storage.tsdb.path=prometheus/data \
+>   --web.listen-address=0.0.0.0:9090 \
+>   > /fs/untd-1/threatos-monitoring/prometheus.log 2>&1 &
+[1] 868981
+[root@test05 threatos-monitoring]# echo "Prometheus PID: $!"
+Prometheus PID: 868981
+[root@test05 threatos-monitoring]#
+[root@test05 threatos-monitoring]# nohup ./grafana/bin/grafana server \
+>   --homepath ./grafana \
+>   --config ./grafana/conf/defaults.ini \
+>   > /fs/untd-1/threatos-monitoring/grafana.log 2>&1 &
+[2] 868982
+[root@test05 threatos-monitoring]# echo "Grafana PID: $!"
+Grafana PID: 868982
+[root@test05 threatos-monitoring]#
+[root@test05 threatos-monitoring]# sleep 5
+[root@test05 threatos-monitoring]# curl -s http://localhost:9090/-/ready && echo " — Prometheus ready"
+Prometheus Server is Ready.
+ — Prometheus ready
+[root@test05 threatos-monitoring]# curl -s http://localhost:3000/api/health
+{
+  "commit": "d3ce857c0eb86f571ffa993a9cd8493b6f47b630",
+  "database": "ok",
+  "version": "10.4.1"
+
+
+
+
+
+
+
+
+
+
+
+
+cd /fs/untd-1/threatos-monitoring && nohup ./prometheus/prometheus --config.file=prometheus/prometheus.yml --storage.tsdb.path=prometheus/data --web.listen-address=0.0.0.0:9090 > prometheus.log 2>&1 & disown

@@ -1,3 +1,5 @@
+# ── ThreatOS Backup Script ─────────────────────────────────────────────────
+cat > /opt/threatos/scripts/backup_threatos.sh << 'EOF'
 #!/bin/bash
 # ══════════════════════════════════════════════════════════════════
 # backup_threatos.sh — ThreatOS complete backup
@@ -85,3 +87,14 @@ TOTAL=$(du -sh "$BACKUP_DIR" | cut -f1)
 log "Backup dir total size: $TOTAL"
 log "ThreatOS backup DONE — $DATE"
 log ""
+EOF
+
+chmod +x /opt/threatos/scripts/backup_threatos.sh
+echo "ThreatOS backup script created"
+
+
+# ── Testing backup_threatos.sh script ──────────────────────────────────────────────────────
+
+echo ""
+echo "=== Testing ThreatOS backup ==="
+bash /opt/threatos/scripts/backup_threatos.sh

@@ -1,0 +1,430 @@
+Can you detail about how grafana and prometheus works ?
+How to make use of Threat Intelligence?
+what else can be added or improved in Security Report?How to use Event Search, Purple Team, Attack Chains and what to do with Alerts?5:40 PMClaude responded: Let me cover all four topics in detail.Let me cover all four topics in detail.
+
+1. How Prometheus + Grafana Works
+ThreatOS Server (test06)          Remote Machine (test05)
+─────────────────────────         ───────────────────────
+FastAPI :8001                     Prometheus :9090
+  └── /metrics endpoint  ◄──────── scrapes every 15s
+      exposes 18 metrics           stores time-series data
+                                        │
+                                        ▼
+                                   Grafana :3000
+                                   reads from Prometheus
+                                   draws charts + dashboards
+                                   sends alerts if thresholds hit
+The flow in plain English:
+
+ThreatOS exposes a /metrics URL that lists current counts
+Prometheus visits that URL every 15 seconds and records the numbers
+Grafana reads Prometheus and draws them as charts over time
+You can set alert rules in Grafana — e.g. "notify me if open alerts > 5"
+
+What each ThreatOS metric means in Grafana:
+threatos_alerts_created_total
+  → Rate of new alerts over time
+  → Spike = something is being detected
+  → Zero for hours = no events coming in (pipeline broken)
+
+threatos_worker_lag_events
+  → How many events are waiting to be processed
+  → Should always be near 0
+  → If it grows = worker is overwhelmed or crashed
+
+threatos_http_request_duration_seconds
+  → API response times
+  → p95 > 2s = something is slow, investigate DB or pool
+
+threatos_attck_coverage_percent
+  → Should stay at 100% — drops if rules get bulk disabled
+
+threatos_rules_loaded_total
+  → Should match rules_enabled_total
+  → Gap between them = engine didn't reload after rule change
+
+threatos_alerts_by_status{status="open"}
+  → Current open alert count
+  → Set Grafana alert: if > 10 for 5 minutes → send notification
+
+threatos_db_pool_checked_out / threatos_db_pool_size
+  → DB connection pool usage %
+  → If consistently > 80% = add more pool connections or PgBouncer
+  
+Setting up Prometheus alerts (on test05):
+yaml# Add to prometheus/alerts.yml
+groups:
+  - name: threatos
+    rules:
+      - alert: WorkerLagHigh
+        expr: threatos_worker_lag_events > 1000
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ThreatOS worker lag too high"
+          description: "{{ $value }} events pending"
+
+      - alert: NoEventsIngested
+        expr: rate(threatos_events_ingested_total[1h]) == 0
+        for: 2h
+        labels:
+          severity: warning
+        annotations:
+          summary: "No events ingested in 2 hours"
+
+      - alert: OpenAlertsHigh
+        expr: threatos_alerts_by_status{status="open"} > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} open alerts need review"
+		  
+Key Grafana panels to create first:
+Panel	Query	Why
+Open alerts over time	threatos_alerts_by_status{status="open"}	Are alerts being investigated?
+Event ingestion rate	rate(threatos_events_ingested_total[5m])	Is log pipeline flowing?
+Worker lagthreatos_worker_lag_events								Is detection keeping up?
+API latency p95histogram_quantile(0.95, rate(threatos_http_request_duration_seconds_bucket[5m]))	Is the API healthy?
+Coverage %threatos_attck_coverage_percent							Did rules get accidentally disabled?
+DB pool usagethreatos_db_pool_checked_out / threatos_db_pool_size * 100 	Are we running out of DB connections?
+
+2. How to Use Threat Intelligence
+TI enrichment turns a raw alert like this:
+Alert: PowerShell EncodedCommand
+Host:  WIN-DC01
+Risk:  72.0
+Into an actionable finding like this:
+Alert: PowerShell EncodedCommand
+Host:  WIN-DC01  (criticality 4 — Domain Controller)
+Risk:  72.0
+
+TI Enrichment:
+  src_ip: 45.33.32.156
+    VirusTotal:  MALICIOUS  (47/94 engines)  country=US  ASN=Linode
+    AbuseIPDB:   MALICIOUS  score=98%  reports=1,247  ISP=Akamai
+  
+  Verdict: CONFIRMED MALICIOUS — active C2 infrastructure
+Daily TI workflow:
+bash# Step 1 — Enrich all open high-risk alerts automatically
+curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8001/api/ti/enrich-open-alerts?limit=20" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(f'Enriched: {d[\"enriched\"]} alerts')
+for r in d['results']:
+    if r['verdict'] != 'clean':
+        print(f'  ⚠ {r[\"alert_id\"][:8]}  {r[\"verdict\"]:12}  {r[\"summary\"]}')
+"
+
+# Step 2 — Look up a specific suspicious IP from an alert
+curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  http://localhost:8001/api/ti/enrich \
+  -d '{"ioc_value":"SUSPICIOUS_IP_HERE","ioc_type":"ip"}'
+
+# Step 3 — Look up a file hash from an alert
+curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  http://localhost:8001/api/ti/enrich \
+  -d '{"ioc_value":"FILE_HASH_HERE","ioc_type":"sha256"}'
+
+# Step 4 — View all malicious IOCs found so far
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8001/api/ti/cache?verdict=malicious" | python3 -c "
+import json,sys
+for r in json.load(sys.stdin):
+    print(f'  {r[\"ioc_type\"]:8} {r[\"ioc_value\"]:<40} score={r[\"score\"]} country={r[\"country\"]}')
+"
+TI decision tree:
+Alert fires
+    │
+    ▼
+Enrich IOCs (src_ip, file_hash, domain)
+    │
+    ├── MALICIOUS verdict
+    │       → Immediate escalation
+    │       → Block IP at firewall
+    │       → Isolate host
+    │       → Start incident response
+    │
+    ├── SUSPICIOUS verdict
+    │       → Investigate further
+    │       → Check other alerts from same IP
+    │       → Correlate into attack chain
+    │       → Monitor closely
+    │
+    ├── CLEAN verdict
+    │       → Lower priority
+    │       → Rule may be noisy
+    │       → Consider marking false positive
+    │
+    └── UNKNOWN verdict (no data)
+            → Manual investigation needed
+            → Check logs for context
+            → Trust the rule severity instead
+TI enriches your weekly report too — after enriching alerts you can see:
+This week: 3 alerts involved confirmed malicious infrastructure
+  45.33.32.156  — Linode VPS, AbuseIPDB score 98%, 1,247 reports
+  185.220.101.34 — Tor exit node, VT 67/94 engines
+  8.8.4.4        — Clean (Google DNS — false positive candidate)
+
+3. What to Add to the Security Report
+The current report covers alerts, coverage, and chain stats. Here's what would make it more valuable for management and compliance:
+Currently in the report:
+✅ Total alerts + avg/max risk score
+✅ Alerts by status breakdown
+✅ Top 10 detected techniques
+✅ Top 10 most alerted hosts
+✅ High risk alerts (≥70)
+✅ ATT&CK coverage %
+✅ Attack chains summary
+✅ Rules loaded count
+✅ Events ingested count
+
+What should be added:
+1. TI Enrichment Summary
+Malicious IOCs confirmed this week: 3
+Suspicious IOCs: 7
+Most targeted technique: T1021.001 (RDP) — 12 alerts
+External threat actors detected: 2 confirmed IPs
+
+2. Mean Time to Detect (MTTD)
+Average time from event ingestion to alert creation: 4.2 seconds
+Fastest detection: 0.8s (PowerShell EncodedCommand)
+Slowest detection: 12.1s (batch processing delay)
+
+3. Mean Time to Respond (MTTR)
+Average time from alert created to alert closed: 2h 14m
+Alerts investigated within 1 hour: 67%
+Alerts still open after 24 hours: 2 (need attention)
+
+4. False Positive Rate
+Rules with FP rate > 50%: 3 rules (need tuning)
+Total FPs marked this week: 5
+Top FP rule: [Custom] Systemctl Service Execution — 80% FP rate
+
+5. Coverage Trend
+Coverage last week: 49.1%
+Coverage this week: 100.0%
+Change: +50.9% (691 new techniques covered)
+
+6. Top Critical Assets at Risk
+WIN-DC01        4 alerts  max_risk=85  status=investigating
+linux-server01  2 alerts  max_risk=72  status=open
+WIN-SERVER01    1 alert   max_risk=63  status=closed
+
+7. Compliance Summary
+Audit log integrity: ✅ Chain unbroken (45 entries verified)
+Data retention: Raw events: 3 rows (well within 90-day limit)
+Active sessions: 1 (admin from 10.103.32.x)
+Failed login attempts this week: 6 (1 lockout triggered)
+
+8. Recommendations section
+ACTION REQUIRED:
+  1. WIN-DC01 has 4 open alerts — correlate and investigate
+  2. 3 rules have >50% FP rate — review and tune
+  3. No real log sources connected — connect syslog to get real data
+
+COMPLETED THIS WEEK:
+  1. ATT&CK coverage reached 100%
+  2. TI enrichment confirmed 3 malicious IPs
+  3. All services running — no downtime
+To add these to the PDF report, the backend needs 3-4 new DB queries in report_service.py. Want me to build this enhanced report?
+
+4. How to Use Event Search, Purple Team, Attack Chains, and Alerts
+Event Search — Used for Investigation
+Event Search is your forensic tool. You use it after an alert fires to understand what happened.
+Scenario: Alert fires — PSExec detected on WIN-SERVER01
+
+Step 1: Go to Event Search
+  Host:        WIN-SERVER01
+  Time window: Last 24 hours
+  → See ALL events from that server
+
+Step 2: Look at the timeline
+  09:45  mstsc.exe connects to WIN-SERVER01 from 10.10.10.20
+  09:46  PSEXESVC.exe installed
+  09:47  cmd.exe /c whoami
+  09:47  cmd.exe /c net user /domain
+  09:48  cmd.exe /c net user hacker /add
+
+Step 3: Now you have the full attack story
+  Attacker IP: 10.10.10.20 (WIN-WORKSTATION01)
+  Method: RDP then PSExec
+  Actions: Recon then added backdoor account
+
+Step 4: Search for the attacker's source
+  Host: WIN-WORKSTATION01
+  → See how THEY got access
+  → Was there a phishing email?
+  → Was there an RDP brute force?
+Key Event Search filters:
+host         → narrow to one machine
+process      → find specific executable (powershell, psexec)
+command_line → find specific commands (net user, -EncodedCommand)
+user         → find what a specific user did
+log_source   → filter by winlog vs syslog
+hours_back   → extend window for longer investigations
+
+Purple Team — Used for Validation
+Purple Team answers: "If an attacker used this technique right now, would ThreatOS catch it?"
+Use case 1: Validate a new rule before trusting it
+  POST /api/purple/validate
+  {
+    "technique_id": "T1059.001",
+    "emulated_event": {
+      "process": "powershell.exe",
+      "command_line": "powershell -EncodedCommand abc"
+    }
+  }
+  
+  Result: verdict=pass, detection_rate=100%
+  → Your rule works ✅
+
+Use case 2: Test if a known attack would be caught
+  Emulate a PSExec attack:
+  {
+    "technique_id": "T1569.002",
+    "emulated_event": {
+      "process": "PSEXESVC.exe",
+      "file_path": "C:\\Windows\\PSEXESVC.exe"
+    }
+  }
+  
+  Result: verdict=pass → caught ✅
+  Result: verdict=fail → NOT caught ❌ → fix the rule
+
+Use case 3: Calculate risk before enabling a rule
+  POST /api/purple/score
+  {
+    "severity": 9,
+    "confidence": 0.95,
+    "asset_criticality": 4,
+    "chain_tactic_count": 3,
+    "is_multi_stage": true
+  }
+  
+  Result: risk_score=100 (capped)
+  → This combination = maximum priority incident
+
+Monthly purple team schedule:
+  Week 1: Validate execution + persistence rules
+  Week 2: Validate lateral movement + credential access
+  Week 3: Validate defense evasion + discovery
+  Week 4: Full chain validation for your top 3 scenarios
+
+Attack Chains — Used for Incident Detection
+A single alert = noise. A chain = an incident.
+How to use chains daily:
+
+Step 1: Check the dashboard
+  Multi-Stage Chains > 0 → investigate immediately
+  
+Step 2: For any host with multiple alerts → correlate
+  POST /api/chains/correlate
+  {"host": "WIN-DC01", "window_hours": 24}
+  
+Step 3: Read the chain result
+  tactics_observed: ["initial-access","execution","persistence"]
+  tactic_count: 3
+  is_multi_stage: true      ← THIS IS AN INCIDENT
+  risk_score: 95
+
+Step 4: Understand the kill chain sequence
+  initial-access   → attacker got in (how?)
+  execution        → attacker ran code (what?)
+  persistence      → attacker planted backdoor (where?)
+
+Step 5: Use Event Search to fill the gaps
+  Search host + time window → see every event
+  Build the full attack timeline
+
+Step 6: Update chain status
+  PUT /api/chains/{id}/status
+  {"status": "investigating"}
+  → Prevents duplicate work if multiple analysts
+
+Chain risk scoring:
+  1 tactic  = isolated event (low urgency)
+  2 tactics = related activity (medium urgency)
+  3 tactics = confirmed intrusion (high urgency — act now)
+  4+ tactics= active APT (critical — escalate immediately)
+
+Alerts — The Daily Workflow
+Priority triage (do this every morning):
+
+1. Sort by risk_score descending
+   Score 80-100 → Investigate today
+   Score 60-79  → Review within 24 hours
+   Score 40-59  → Review this week
+   Score 0-39   → Background noise
+
+2. For each high-risk alert:
+
+   a) Check the technique
+      T1059.001 PowerShell → common, need context
+      T1569.002 PSExec     → almost always malicious
+      T1558.001 Golden Ticket → CRITICAL, respond now
+
+   b) Check the host
+      Is it in Assets? What criticality?
+      Domain controller (crit=4) → highest priority
+      Dev machine (crit=1)       → lower priority
+
+   c) Correlate the host
+      POST /api/chains/correlate {"host": "HOST"}
+      Multi-stage result → escalate to incident
+
+   d) Enrich IOCs
+      POST /api/ti/enrich-alert/{alert_id}
+      MALICIOUS verdict → block IP, isolate host
+
+   e) Search raw events
+      GET /api/events/search?host=HOST&hours_back=24
+      Build the full story
+
+   f) Make a decision:
+      Real threat  → status=investigating → escalate
+      False positive → status=false_positive → tune rule
+      Benign       → status=closed → document why
+
+3. Weekly alert hygiene:
+   → Check noisy rules: GET /api/detection/noisy-rules
+   → Disable rules with FP rate > 80%
+   → Review rules that haven't fired in 30 days
+   → Create rules for techniques that had 0 detections
+Alert status lifecycle:
+open
+  → investigating  (you're looking at it)
+      → escalated      (needs incident response team)
+      → closed         (resolved — document what happened)
+  → false_positive (rule fired incorrectly — tune the rule)
+  → closed         (reviewed, benign — document why)
+
+Never delete alerts — they're your audit trail.
+Always document why you closed something.
+
+Summary — Daily 15-Minute Security Routine
+Morning (10 minutes):
+  1. Dashboard → any multi-stage chains? → escalate immediately
+  2. Sort alerts by risk → investigate top 3
+  3. Enrich top alerts with TI → any malicious IPs?
+  4. Health page → all services green?
+
+Weekly (1 hour):
+  5. Run threat simulation → python scripts/simulate_threats.py
+  6. Purple team validate top 5 techniques
+  7. Review noisy rules → tune FP rate
+  8. Download PDF report → share with manager
+  9. Check disk: GET /api/retention/estimate
+  10. Verify backup exists: ls -lh /backup/threatos/
+
+Monthly (2 hours):
+  11. Full purple team validation of all critical techniques
+  12. Review asset registry — all servers registered?
+  13. Review user accounts — any inactive users?
+  14. Check audit integrity → GET /api/compliance/audit-integrity
+  15. Coverage check — any new Sigma rules from daily import?
+Want me to build the enhanced security report with MTTD, MTTR, FP rates, and TI summary?

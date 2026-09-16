@@ -1,0 +1,109 @@
+(.venv) [root@test06 fim]# tree -L 3 -I 'node_modules|__pycache__|venv|*.pyc' /opt/threatos/ 2>/dev/null || > tree -L 3 -I 'node_modules|__pycache__|venv|*.pyc' /usr/local/opt/threatos/ 2>/dev/null || > find /opt/threatos -type f -name "*.py" -o -name "*.tsx" -o -name "*.ts" -o -name "*.yaml" -o -name "*.json" 2>/dev/null | head -100
+/opt/threatos/
+|-- README.md
+|-- alembic.ini
+|-- docs
+|-- pyproject.toml
+|-- scripts
+|   |-- backup_threatos.sh
+|   |-- create_custom_rules.py
+|   |-- import_sigma_rules.py
+|   |-- simulate_threats.py
+|   `-- syslog_forwarder.py
+|-- threatos
+|   |-- __init__.py
+|   |-- api
+|   |   |-- __init__.py
+|   |   `-- routers
+|   |-- core
+|   |   |-- __init__.py
+|   |   |-- attck_kb.py
+|   |   |-- auth.py
+|   |   |-- database.py
+|   |   |-- dependencies.py
+|   |   |-- logging_config.py
+|   |   |-- metrics.py
+|   |   |-- redis_client.py
+|   |   |-- sanitiser.py
+|   |   `-- settings.py
+|   |-- detection
+|   |   |-- __init__.py
+|   |   |-- risk_scorer.py
+|   |   |-- rule_ast.py
+|   |   |-- rule_engine.py
+|   |   `-- rule_loader.py
+|   |-- frontend
+|   |   |-- README.md
+|   |   |-- dist
+|   |   |-- eslint.config.js
+|   |   |-- index.html
+|   |   |-- package-lock.json
+|   |   |-- package.json
+|   |   |-- public
+|   |   |-- src
+|   |   |-- tsconfig.app.json
+|   |   |-- tsconfig.json
+|   |   |-- tsconfig.node.json
+|   |   `-- vite.config.ts
+|   |-- ingestion
+|   |   |-- __init__.py
+|   |   |-- normalizer.py
+|   |   `-- syslog_parser.py
+|   |-- main.py
+|   |-- migrations
+|   |   |-- env.py
+|   |   `-- versions
+|   |-- models
+|   |   |-- __init__.py
+|   |   |-- alert.py
+|   |   |-- asset.py
+|   |   |-- attack_chain.py
+|   |   |-- audit_log.py
+|   |   |-- base.py
+|   |   |-- coverage_matrix.py
+|   |   |-- detection_rule.py
+|   |   |-- login_attempt.py
+|   |   |-- purple_team_run.py
+|   |   |-- raw_event.py
+|   |   |-- rule_change_request.py
+|   |   |-- rule_metrics.py
+|   |   |-- rule_version.py
+|   |   |-- scan_result.py
+|   |   |-- ti_enrichment.py
+|   |   |-- token_blacklist.py
+|   |   |-- user.py
+|   |   `-- user_session.py
+|   |-- services
+|   |   |-- __init__.py
+|   |   |-- alert_service.py
+|   |   |-- asset_service.py
+|   |   |-- audit_service.py
+|   |   |-- chain_service.py
+|   |   |-- compliance_service.py
+|   |   |-- coverage_service.py
+|   |   |-- detection_quality_service.py
+|   |   |-- event_search_service.py
+|   |   |-- health_alert_service.py
+|   |   |-- nmap_service.py
+|   |   |-- purple_service.py
+|   |   |-- report_service.py
+|   |   |-- retention_service.py
+|   |   |-- suppression_service.py
+|   |   `-- ti_service.py
+|   |-- tests
+|   |   |-- __init__.py
+|   |   |-- fixtures
+|   |   |-- integration
+|   |   `-- unit
+|   `-- workers
+|       |-- __init__.py
+|       |-- coverage_worker.py
+|       |-- ingest_worker.py
+|       `-- retention_worker.py
+`-- threatos.egg-info
+    |-- PKG-INFO
+    |-- SOURCES.txt
+    |-- dependency_links.txt
+    `-- top_level.txt
+
+22 directories, 83 files

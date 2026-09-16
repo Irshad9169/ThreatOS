@@ -1,0 +1,12 @@
+[Unit]
+Description=ThreatOS daily Sigma rule import
+After=network.target threatos-api.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/threatos
+Environment="PATH=/opt/threatos/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/opt/threatos/.venv/bin/python scripts/import_sigma_rules.py
+StandardOutput=journal
+StandardError=journal

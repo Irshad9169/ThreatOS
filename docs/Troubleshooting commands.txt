@@ -1,0 +1,68 @@
+Linotp Troubleshooting commands:
+
+https://otp01.vgs.int.untd.com/validate/check?user=mbaba&pass=963258334519
+
+
+
+
+
+
+
+
+
+
+
+[mbaba@trapper81 snort]$ less /var/untd/snort/default/var/logs/snort-startup.log
+
+sudo /var/untd/snort/default/bin/snort -T -c /var/untd/snort/default/etc/snort/snort.lua
+
+
+Grant Snort binary CAP_NET_RAW and CAP_NET_ADMIN so it can capture packets without root:
+sudo setcap cap_net_raw,cap_net_admin=eip /var/untd/snort/default/bin/snort
+
+ [mbaba@trapper81 ~]$ sudo -u nids /var/untd/snort/default/bin/snort -D -i eth0 -c /var/untd/snort/default/etc/snort/snort.lua
+
+
+
+
+
+The above vulnerability has been patched.
+
+The above vulnerabilities have been patched.
+
+sudo ongroup -h 'untd-pci' "rpm -qa | grep bzip2-1.0.6-28.el8_10" | sort
+
+sudo ongroup -h 'untd-pci' rpm -qa | grep -E 'java-1.8.0-openjdk-headless-1.8.0.*|java-1.8.0-openjdk-devel-1.8.0.*|java-1.8.0-openjdk-1.8.0.*' | grep -E 'poutil|trapper|memdeskdb' | sort
+
+
+
+cp  /var/untd/pulledpork/default/var/output/pulledpork.rules snort.rules
+cp  /var/untd/pulledpork/default/var/output/sid-msg.map  sid-msg.map
+
+
+#rule_path=/var/untd/pulledpork/default/var/output/pulledpork.rules
+#rule_path=/var/untd/snort/default/etc/rules/snort.rules
+rule_path=/var/untd/pulledpork/default/var/output/snort.rules
+
+
+
+----------------------------
+Show timestamps in history interactively
+
+Run:
+set history = 2000
+set savehist = (2000 merge)
+set histtime
+
+Now try: history
+-----------------------------------
+
+
+
+ sudo ongroup --title -h untd-poutil 'crontab -l -u idmauto'
+
+
+To pull IPs
+10.181.13.1 "www.magicjack.com" "52.45.42.221" - - [02/Nov/2025:00:01:18 -0700] "GET /account/mjLandingpages.do?page=index HTTP/1.0" 200 54440 -  "https://www.magicjack.com/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.10 Safari/605.1.1" "-"
+10.181.13.1 "www.magicjack.com" "52.21.64.77" - - [02/Nov/2025:00:01:20 -0700] "GET /index.html HTTP/1.0" 302 246 +  "http://www.magicjack.com/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.10 Safari/605.1.1" "-"
+ awk -F'"' '{print $4}' /tmp_mnt/homefs/mnt/mbaba/extabuseIP01.txt > AbuseIPs

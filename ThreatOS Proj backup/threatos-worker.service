@@ -1,0 +1,18 @@
+[Unit]
+Description=ThreatOS ingest worker
+After=network.target threatos-api.service redis.service
+Requires=redis.service
+
+[Service]
+Type=exec
+User=root
+WorkingDirectory=/opt/threatos
+Environment="PATH=/opt/threatos/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/opt/threatos/.venv/bin/python -m threatos.workers.ingest_worker
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

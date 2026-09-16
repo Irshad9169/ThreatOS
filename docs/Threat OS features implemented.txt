@@ -1,0 +1,152 @@
+ThreatOS — Complete Build Summary
+╔══════════════════════════════════════════════════════════════════╗
+║              ThreatOS — Production Status                        ║
+╠══════════════════════════════════════════════════════════════════╣
+║  Web UI      http://YOUR_IP:8080                                 ║
+║  API docs    http://YOUR_IP:8001/docs                            ║
+║  Health      http://YOUR_IP:8001/health  (no auth)              ║
+╚══════════════════════════════════════════════════════════════════╝
+Database — 10 Tables
+TableRowsPurposedetection_rules2,662Sigma + custom rulescoverage_matrix691ATT&CK heatmapaudit_logs21Who did what, whenpurple_team_runs11Validation historyassets8Host registryscan_results5Nmap historyraw_events3Ingested log eventsalerts3Detection hitsattack_chains1Correlated incidentsusers1Auth — admin user
+
+All Features Built
+Phase 1 — Core Auth
+
+JWT login/logout with 8-hour token, 30-day refresh
+sessionStorage persistence — survives page refresh, clears on tab close
+Role-based access: admin / engineer / analyst / ingest
+API key auth for log forwarding scripts (X-API-Key header)
+Auto token refresh on 401, redirect to login on expiry
+Default admin created on first startup
+
+Phase 2 — User Management
+
+Full user CRUD — create, update role, activate/deactivate
+Password change (self) and reset (admin)
+API key generation and revocation per user
+Last admin protection — cannot demote last active admin
+"My Account" section with inline password change
+
+Asset Delete
+
+Delete button with confirmation modal
+Warns that existing alerts for the host are preserved
+
+Audit Logging — every action tracked
+
+Login / logout / failed login attempts
+Password changes and resets
+User create / update / deactivate / activate
+API key generate / revoke
+Rule create / toggle
+Alert status updates
+Asset create / update / delete
+Chain correlate / status update
+Coverage refresh
+Purple team validations
+Scan create / run
+Filterable by user, action, resource, result
+Detail panel with before/after change tracking
+
+Phase 4 — Event Search + Reports
+
+Raw event search by host, process, command line, user, log source, time window
+Event stats by log source
+Alert suppression stats — shows noisy rule/host combinations
+Weekly security report — configurable 1-90 day periods
+PDF download — cover page, stat grid, alert breakdown, top techniques, top hosts, coverage bar
+Health check endpoint — database, Redis, rule engine, ATT&CK cache status
+
+UI Pages — 13 total
+PageAccessDashboardAllAlertsAllRulesAll (create/toggle = engineer+)AssetsAll (create/delete = engineer+)ChainsAllCoverageAll (refresh = engineer+)Purple TeamAllScansAll (run = engineer+)UsersAdmin onlyAudit LogEngineer + AdminEvent SearchAllReportsAll (PDF download = engineer+)
+Services — all systemd managed, auto-start on reboot
+threatos-api        FastAPI :8001  2 workers
+threatos-worker     Redis stream consumer
+threatos-coverage   ATT&CK hourly refresh
+threatos-sigma-import.timer  Daily 02:00 — fresh Sigma rules
+redis               :6379
+postgresql-15       :5432
+nginx               :8080
+
+Quick Reference
+bash# Service management
+systemctl restart threatos-api threatos-worker threatos-coverage
+
+# Live logs
+journalctl -u threatos-api -f
+
+# Run Sigma import now
+cd /opt/threatos && source .venv/bin/activate
+python scripts/import_sigma_rules.py
+
+# Run threat simulation
+python scripts/simulate_threats.py
+
+# Push test event
+python3 -c "
+import redis, json
+r = redis.Redis(host='localhost', port=6379, decode_responses=True)
+r.xadd('threatos:events:normalized', {
+    'event_id': 'test-001', 'log_source': 'winlog',
+    'host': 'WIN-DC01', 'process': 'powershell.exe',
+    'command_line': 'powershell -EncodedCommand abc',
+    'raw_fields': json.dumps({'process':'powershell.exe'}),
+})
+print('Done')
+"
+
+# Change admin password (do this now if you haven't)
+curl -s -X POST http://localhost:8001/api/auth/change-password \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"current_password":"<REDACTED_PASSWORD>","new_password":"YOUR_NEW_PASSWORD"}'
+
+One thing to do right now — change the default admin password from <REDACTED_PASSWORD> to something strong. You can do it in the UI under Users → My Account → Change Password, or via the curl command above.
+
+
+
+ThreatOS — Production Hardening Complete
+╔══════════════════════════════════════════════════════════════════╗
+║         ThreatOS — Production Grade Status                       ║
+╠══════════════════════════════════════════════════════════════════╣
+║  Routes:   65  across 17 functional groups                       ║
+║  Tables:   17  in PostgreSQL                                     ║
+║  Services: 5   systemd managed                                   ║
+║  Rules:    2,662 detection rules loaded                          ║
+╚══════════════════════════════════════════════════════════════════╝
+
+Group 1 — Security Hardening ✅
+FeatureWhat was builtJWT rotationSeparate ACCESS + REFRESH secrets, each 64-char random hexToken blacklisttoken_blacklist table — logout actually revokes tokensRate limiting5 failed attempts → 15-minute lockout per IP, tracked in DBInput sanitisationPayload size cap (64KB), field length cap (2048), script injection removal, null byte stripping, log_source validationDB credentialsAll credentials in .env only — never hardcodedData retentionretention_worker runs daily — raw_events 90d, audit 365d, closed alerts 365d, scans 180dWorker crash recoveryXAUTOCLAIM reclaims stuck pending messages from crashed workersAlert suppressionWired into ingest worker — no duplicate alerts within 15-minute windowConnection poolingpool_pre_ping=True, pool_recycle=1800, PgBouncer-ready
+
+Group 2 — Detection Quality ✅
+FeatureWhat was builtRule metricsrule_metrics table — eval count, match count, avg eval time per ruleFP trackingPOST /api/detection/false-positive/{alert_id} — marks FP + updates rule FP rateAuto-suggest disableRules with FP rate ≥ 80% flagged with suggested_disable=trueRule version historyrule_versions table — snapshot on every create/toggleSigma deduplicationContent hash on detection_ast + technique_id — finds duplicate rulesDetection dry-runPOST /api/detection/test — evaluate AST against last N events without creating alerts, shows match rate and FP risk estimateNoisy rules reportGET /api/detection/noisy-rules — sorted by FP rate
+
+Group 3 — Observability ✅
+FeatureWhat was builtPrometheus metricsGET /metrics — 15 metric types: requests, alerts, events, rules, coverage, worker lag, DB poolHTTP middlewarePrometheusMiddleware — tracks every request duration and status codeStructured loggingstructlog — JSON in production, coloured in devHealth alertingGET /health/status — checks worker lag, event pipeline, rule count, engine load, coverage dropsPlatform statusActive health alerts with level (critical/warning), component checks, live metrics
+
+Group 4 — Compliance & Governance ✅
+FeatureWhat was builtSession managementuser_sessions table — max 5 concurrent sessions per user, oldest auto-revokedSession listingGET /api/compliance/sessions — see all active sessionsSession revocationDELETE /api/compliance/sessions/{id} — force logout specific deviceForce logout allPOST /api/compliance/sessions/revoke-all/{user_id} — admin nuclear optionAudit hash chainEvery audit entry has SHA256 hash chained to previous entryTamper detectionGET /api/compliance/audit-integrity — verifies entire hash chainRule change requestsSubmit → admin review → approve/reject workflowChange historyrule_versions — full snapshot of every rule change
+
+All 17 API Groups
+alerts        chains        compliance    coverage
+detection     events        health        ingest
+metrics       purple        report        retention
+rules         scans         assets        audit
+auth
+
+Services Running
+bash# Check all
+for svc in threatos-api threatos-worker threatos-coverage \
+           threatos-retention threatos-sigma-import.timer; do
+    echo "  $(systemctl is-active $svc)  $svc"
+done
+
+What Remains for True Enterprise Grade
+The items below were designed but not yet implemented — they require external infrastructure decisions:
+HTTPS              → Need internal CA cert from your IT team
+PgBouncer          → Install pgbouncer, set PGBOUNCER_MODE=true in .env
+Prometheus scrape  → Install Prometheus + Grafana, point at /metrics
+Real log connectors → WEF forwarder or syslog receiver
+Ticketing          → Jira/ServiceNow webhook on high-risk alerts
+Backup             → pg_dump cron to /backup/ or S3
+All the backend hooks are in place — /metrics is live, PGBOUNCER_MODE flag exists in database.py, health checks run automatically. You just need the external tools pointed at the right endpoints.

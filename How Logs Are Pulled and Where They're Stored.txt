@@ -1,0 +1,169 @@
+How Logs Are Pulled and Where They're Stored
+
+The Complete Picture
+LINUX SERVERS                    WINDOWS SERVERS
+─────────────                    ───────────────
+/var/log/authlog                 Windows Event Log
+/var/log/messages                (Security, System,
+/var/log/cron                     Application channels)
+/var/log/audit/audit.log                │
+/var/log/nginx/access.log               │
+        │                               │
+        ▼                               ▼
+ syslog_forwarder.py          Windows Event Forwarding
+ (runs on EACH Linux server)   OR WinLogBeat agent
+        │                               │
+        └──────────────┬────────────────┘
+                       │
+                       ▼  POST /api/ingest/batch
+                       │  Header: X-API-Key
+                       │
+              ┌────────────────────┐
+              │  ThreatOS API      │
+              │  test06:8001       │
+              └────────┬───────────┘
+                       │
+                       ▼
+              PostgreSQL raw_events table
+              (stored 90 days, then auto-deleted)
+
+Linux Servers — How It Works Today
+What runs where:
+Each Linux server you want to monitor:
+  └── syslog_forwarder.py  (small Python script, runs as systemd service)
+      │
+      ├── Reads:  /var/log/authlog    (SSH, sudo, PAM)
+      ├── Reads:  /var/log/messages   (system events)
+      ├── Reads:  /var/log/cron       (scheduled tasks)
+      ├── Reads:  /var/log/audit/audit.log
+      └── Reads:  /var/log/nginx/access.log
+      │
+      └── Sends batches to → http://test06:8001/api/ingest/batch
+                             (using API key for authentication)
+Currently monitoring:
+
+test06.hyd.int.untd.com — the ThreatOS server itself ✅
+
+To add any other Linux server (5 minutes work):
+bash# On the new Linux server
+scp root@test06:/opt/threatos/scripts/syslog_forwarder.py /opt/
+
+# Create the service
+cat > /etc/systemd/system/threatos-forwarder.service << 'EOF'
+[Unit]
+Description=ThreatOS Syslog Forwarder
+After=network.target
+
+[Service]
+Type=exec
+Environment="THREATOS_URL=http://test06.hyd.int.untd.com:8001"
+Environment="THREATOS_API_KEY=<REDACTED_API_KEY>"
+ExecStart=/usr/bin/python3 /opt/syslog_forwarder.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl enable --now threatos-forwarder
+# Done — that server is now monitored
+
+Windows Servers — How It Would Work
+We haven't built this yet — but here's the plan:
+Windows Server
+  └── Windows Event Log
+      ├── Security channel   (4624 logins, 4625 failures,
+      │                       4688 process creation, 4698 scheduled tasks)
+      ├── System channel     (service starts/stops)
+      └── Application channel
+
+      Two options to get logs to ThreatOS:
+
+      OPTION A: NXLog / Winlogbeat agent
+      ─────────────────────────────────
+      Install NXLog (free) or Winlogbeat on each Windows server
+      Configure to forward to ThreatOS /api/ingest/batch
+      Same API key auth
+
+      OPTION B: Windows Event Forwarding (WEF)
+      ─────────────────────────────────────────
+      Windows built-in feature — no agent needed
+      Collector server receives events from all Windows machines
+      Collector forwards to ThreatOS
+Windows Event IDs that matter most:
+Event IDWhat It MeansATT&CK Technique4624Successful logonT1078 Valid Accounts4625Failed logonT1110 Brute Force4648Logon with explicit credentialsT1134 Token Manipulation4688New process createdT1059 Command Execution4698Scheduled task createdT1053.005 Scheduled Task4720User account createdT1136 Create Account4732User added to groupT1098 Account Manipulation7045New service installedT1543.003 Windows Service4104PowerShell script blockT1059.001 PowerShell
+The Sigma rules we imported already handle Windows events:
+2,641 Sigma rules imported — majority are Windows-focused
+When Windows logs start flowing in → those rules activate automatically
+No rule changes needed
+
+Where Logs Are Stored
+Raw events — PostgreSQL:
+sqlTable: raw_events
+  id           UUID
+  received_at  TIMESTAMPTZ    ← when ThreatOS received it
+  log_source   VARCHAR        ← "syslog-auth", "winlog", "nginx" etc
+  hash         VARCHAR        ← SHA256 for deduplication
+  normalized   JSONB          ← parsed fields: host, user, process,
+                                 command_line, src_ip, message...
+
+Retention: 90 days (auto-deleted by retention worker)
+Current size: ~3.5MB for test06 logs
+Alerts — PostgreSQL:
+sqlTable: alerts
+  technique_id  VARCHAR   ← T1059.004
+  tactic        VARCHAR   ← execution
+  risk_score    FLOAT     ← 73.5
+  entity_host   VARCHAR   ← test06.hyd.int.untd.com
+  entity_user   VARCHAR   ← root
+  status        VARCHAR   ← open/investigating/closed/false_positive
+  ti_verdict    VARCHAR   ← malicious/suspicious/clean (after TI enrichment)
+
+Retention: 365 days
+NOT stored — what gets discarded:
+
+Duplicate events (same hash within dedup window)
+Events older than 90 days (raw_events)
+Benign events that don't match any rule (they're evaluated then discarded)
+
+
+The Key Point for Your Manager
+Tell your manager this:
+
+"Every Linux server in our environment needs a small Python script installed — about 50 lines of code — that reads the existing system logs and forwards them to ThreatOS. The logs already exist on every server. We're just reading them and sending them over the network.
+For Windows servers, there are two options: install a free agent like NXLog, or use Windows' built-in Event Forwarding feature. Either way, the 2,641 Windows detection rules we already have will start working automatically the moment Windows events start flowing in.
+All logs are stored in our own PostgreSQL database on test06, retained for 90 days for raw events and 1 year for alerts. Nothing goes to any external service. The only external calls are to VirusTotal and AbuseIPDB for threat intelligence lookups — and those only happen when we explicitly enrich an alert."
+
+
+Summary Diagram for the Presentation
+                    YOUR INFRASTRUCTURE
+┌───────────────────────────────────────────────────────────┐
+│                                                           │
+│  Linux Server 1    Linux Server 2    Linux Server 3       │
+│  (test06) ✅       (future)          (future)             │
+│     │                  │                  │               │
+│     │ forwarder.py      │ forwarder.py     │ forwarder.py  │
+│     └──────────────────┴──────────────────┘               │
+│                         │                                 │
+│  Windows Server 1    Windows Server 2                     │
+│  (future)            (future)                             │
+│     │                  │                                  │
+│     │ NXLog/WEF        │ NXLog/WEF                        │
+│     └──────────────────┘                                  │
+│                         │                                 │
+│                         ▼  API Key authentication         │
+│              ┌─────────────────────┐                      │
+│              │   ThreatOS          │                      │
+│              │   test06:8001       │                      │
+│              │                     │                      │
+│              │  PostgreSQL DB      │ ← logs stored here   │
+│              │  90 days raw events │                      │
+│              │  365 days alerts    │                      │
+│              └─────────────────────┘                      │
+│                                                           │
+└───────────────────────────────────────────────────────────┘
+                         │
+              External TI lookups only
+              (VirusTotal, AbuseIPDB)
+              when analyst requests enrichment
+Everything stays inside your network. Logs never leave.

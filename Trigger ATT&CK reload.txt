@@ -1,0 +1,27 @@
+# Trigger ATT&CK reload
+TOKEN=$(curl -s -X POST http://localhost:8001/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"<REDACTED_PASSWORD>"}' | \
+  python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")
+
+curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8001/api/coverage/refresh | python3 -c "
+import json,sys; d=json.load(sys.stdin)
+print(f'Techniques: {d[\"total_techniques\"]}  Covered: {d[\"covered\"]}  ({d[\"coverage_pct\"]}%)')
+"
+
+echo ""
+echo "=== Final health check ==="
+curl -s http://localhost:8001/health | python3 -c "
+import json,sys; d=json.load(sys.stdin)
+print(f'Status: {d[\"status\"]}  Rules: {d[\"rules_loaded\"]}  ATT&CK: {d[\"attck_techniques\"]}')
+"
+
+echo ""
+echo "=== DB summary ==="
+psql -h localhost -U threatos -d threatos -c "
+SELECT tablename AS table, pg_size_pretty(pg_total_relation_size(relid)) AS size
+FROM pg_stat_user_tables
+WHERE schemaname='public'
+ORDER BY pg_total_relation_size(relid) DESC
+LIMIT 10;" 2>/dev/null
