@@ -17,6 +17,7 @@ const NAV = [
   { id: 'reports',    icon: '📊', label: 'Reports',      roles: ['analyst','engineer','admin'] },
   { id: 'health',     icon: '💚', label: 'System Health', roles: ['engineer','admin'] },
   { id: 'ti',         icon: '🔬', label: 'Threat Intel',  roles: [] },
+  { id: 'url-intel',  icon: '🌐', label: 'URL Scanner',   roles: [] },
 ]
 
 const ROLE_COLORS: Record<string, string> = {

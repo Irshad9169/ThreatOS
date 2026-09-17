@@ -15,6 +15,7 @@ import { EventSearch } from './pages/EventSearch'
 import { Reports }        from './pages/Reports'
 import { HealthDashboard }  from './pages/HealthDashboard'
 import { ThreatIntel }      from './pages/ThreatIntel'
+import { UrlIntel }         from './pages/UrlIntel'
 import { isAuthenticated } from './lib/auth'
 
 const PAGES: Record<string, React.ReactNode> = {
@@ -32,6 +33,7 @@ const PAGES: Record<string, React.ReactNode> = {
   reports:   <Reports />,
   health:    <HealthDashboard />,
   ti:        <ThreatIntel />,
+  'url-intel': <UrlIntel />,
 }
 
 export default function App() {
