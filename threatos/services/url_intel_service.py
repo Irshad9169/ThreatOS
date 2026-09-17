@@ -11,6 +11,7 @@ import httpx
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from threatos.services.settings_service import refresh_from_env_file
 from threatos.services.ti_service import (
     VERDICT_CLEAN, VERDICT_MALICIOUS, VERDICT_NO_KEY, VERDICT_SUSPICIOUS,
     VERDICT_UNKNOWN, get_cached_enrichment, save_enrichment,
@@ -368,6 +369,7 @@ def _overall_verdict(verdicts: list[str]) -> str:
 
 async def enrich_url(db: AsyncSession, raw_url: str,
                       investigated_by: str | None = None) -> dict:
+    refresh_from_env_file()
     url, domain = parse_url(raw_url)
 
     sources = {}
@@ -536,3 +538,11 @@ def generate_investigation_report(url: str, domain: str, sources: dict,
     lines.append(bar)
 
     return "\n".join(lines)
+
+
+def get_key_status() -> dict:
+    """Whether urlscan.io/URLhaus keys are configured — read live from this
+    module's own globals (refreshed first) rather than a stale copy someone
+    else might have imported at process-startup time."""
+    refresh_from_env_file()
+    return {"urlscan_key": bool(URLSCAN_API_KEY), "urlhaus_key": bool(URLHAUS_AUTH_KEY)}

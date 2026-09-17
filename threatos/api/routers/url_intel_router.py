@@ -7,9 +7,7 @@ from threatos.core.database import get_db
 from threatos.core.dependencies import get_current_user
 from threatos.models.ti_enrichment import TIEnrichment
 from threatos.models.user import User
-from threatos.services.url_intel_service import (
-    URLHAUS_AUTH_KEY, URLSCAN_API_KEY, enrich_url,
-)
+from threatos.services.url_intel_service import enrich_url, get_key_status
 
 router = APIRouter()
 
@@ -51,7 +49,6 @@ async def url_intel_stats(
     )
     return {
         "total_cached":   int(total.scalar() or 0) + int(spamhaus_total.scalar() or 0),
-        "urlscan_key":    bool(URLSCAN_API_KEY),
-        "urlhaus_key":    bool(URLHAUS_AUTH_KEY),
+        **get_key_status(),
         "spamhaus":       "always available (DNS-based, no key required)",
     }

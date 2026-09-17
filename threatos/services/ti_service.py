@@ -13,6 +13,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from threatos.models.ti_enrichment import TIEnrichment
+from threatos.services.settings_service import refresh_from_env_file
 
 log = logging.getLogger(__name__)
 
@@ -307,6 +308,7 @@ async def enrich_ioc(db: AsyncSession, ioc_type: str,
     Enrich a single IOC from all available sources.
     Returns combined results with overall verdict.
     """
+    refresh_from_env_file()
     results = {}
 
     if ioc_type == "ip":
@@ -383,6 +385,7 @@ async def cleanup_expired_enrichments(db: AsyncSession) -> int:
 
 async def get_enrichment_stats(db: AsyncSession) -> dict:
     """Stats about TI cache."""
+    refresh_from_env_file()
     from sqlalchemy import func
     total = await db.execute(select(func.count(TIEnrichment.id)))
     malicious = await db.execute(

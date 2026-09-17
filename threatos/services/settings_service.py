@@ -30,6 +30,7 @@ _NO_NEWLINES_RE = re.compile(r"^[^\r\n]*$")
 def get_api_key_status() -> dict[str, bool]:
     """Whether each managed key currently has a non-empty value. Never
     returns the actual value."""
+    refresh_from_env_file()
     return {name: bool(os.environ.get(name)) for name in _MANAGED_KEYS}
 
 
@@ -54,6 +55,28 @@ def _apply_in_memory(key_name: str, value: str) -> None:
     for module_path, attr in _MANAGED_KEYS[key_name]:
         module = importlib.import_module(module_path)
         setattr(module, attr, value)
+
+
+def refresh_from_env_file() -> None:
+    """
+    Re-sync this process's copy of each managed key from the .env file on
+    disk. Needed because the API runs as multiple uvicorn worker processes
+    (see deploy/systemd/threatos-api.service, --workers 2) — each is a
+    separate process with its own memory, so a key saved via the UI only
+    updates in-memory state on whichever worker handled that request. The
+    .env file is the one thing every worker actually shares, so re-reading
+    it here (called at the start of each enrichment/status lookup) lets a
+    stale worker catch up without needing a restart.
+    """
+    if not _ENV_PATH.exists():
+        return
+    for line in _ENV_PATH.read_text().splitlines():
+        if "=" not in line or line.strip().startswith("#"):
+            continue
+        key_name, _, value = line.partition("=")
+        if key_name in _MANAGED_KEYS and value and os.environ.get(key_name) != value:
+            os.environ[key_name] = value
+            _apply_in_memory(key_name, value)
 
 
 def _persist_to_env_file(key_name: str, value: str) -> None:
