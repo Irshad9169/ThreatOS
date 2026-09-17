@@ -28,6 +28,7 @@ Rules:    3,044 (SigmaHQ + custom)
 - [Detection Rules](#detection-rules)
 - [ATT&CK Coverage](#attck-coverage)
 - [Threat Intelligence](#threat-intelligence)
+- [URL Scanner](#url-scanner)
 - [Purple Team Validation](#purple-team-validation)
 - [Threat Simulation](#threat-simulation)
 - [Security Report](#security-report)
@@ -47,6 +48,7 @@ Rules:    3,044 (SigmaHQ + custom)
 | Risk scoring | Severity × confidence × asset criticality × chain multiplier |
 | Attack chain correlation | Groups related alerts into multi-stage campaigns |
 | Threat intelligence | VirusTotal + AbuseIPDB enrichment with 24h cache |
+| URL Scanner | 11-source URL/domain investigation with copy-paste email report |
 | Purple team validation | Proves detection rules actually fire |
 | Alert suppression | 15-min dedup window prevents alert storms |
 | Audit trail | SHA256 hash chain tamper detection |
@@ -254,6 +256,20 @@ ABUSEIPDB_API_KEY=
 TI_CACHE_HOURS=24
 TI_TIMEOUT_SECONDS=10
 
+# ── URL Scanner (all optional — see URL Scanner section) ─────────
+# Get free key: https://urlscan.io/user/signup
+URLSCAN_API_KEY=
+# Get free key: https://auth.abuse.ch/ (required, no longer keyless)
+URLHAUS_AUTH_KEY=
+# Get free key: https://console.cloud.google.com/apis/library/safebrowsing.googleapis.com
+GOOGLE_SAFE_BROWSING_API_KEY=
+# Get free key: https://phishtank.org/ (optional — works without one, stricter rate limit)
+PHISHTANK_APP_KEY=
+# Spamhaus DBL, SURBL, URIBL, SEM-URI, RDAP, SPF/DMARC/DKIM need no key at all.
+# All the keys above can also be added/changed from the UI (Threat Intel /
+# URL Scanner pages, admin role only) instead of editing this file — see
+# "Managing API Keys" under URL Scanner below.
+
 # ── Data Retention (days) ────────────────────────────────────────
 RAW_EVENTS_RETENTION_DAYS=90
 AUDIT_LOG_RETENTION_DAYS=365
@@ -433,6 +449,10 @@ GET /api/coverage/summary
 POST /api/ti/enrich
 {"ioc_value":"1.2.3.4","ioc_type":"ip"}
 
+# URL Scanner investigation (returns per-source results + copy-paste report)
+POST /api/url-intel/investigate
+{"url":"https://suspicious-site.example/login"}
+
 # Download PDF report
 GET /api/report/pdf?days=7
 
@@ -462,6 +482,8 @@ GET /metrics
 | Scans | `/api/scans` | JWT |
 | Purple Team | `/api/purple` | JWT |
 | Threat Intel | `/api/ti` | JWT |
+| URL Scanner | `/api/url-intel` | JWT |
+| Settings (API keys) | `/api/settings` | JWT (admin) |
 | Audit | `/api/audit` | JWT |
 | Health | `/health` | None |
 | Metrics | `/metrics` | None |
@@ -604,6 +626,65 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 | `clean` | All sources clean | Lower priority |
 | `unknown` | Not in any database | Check logs for context |
 | `no_api_key` | Key not configured | Add key to .env |
+
+---
+
+## URL Scanner
+
+Investigates a single URL/domain against 11 sources and produces a plain-text
+investigation report meant to be copied straight into an email reply to
+whoever reported the link. Standalone tool — separate from the alert-IOC
+enrichment above, used for one-off "is this link safe" investigations.
+
+### Sources
+
+| Source | Key required | Notes |
+|---|---|---|
+| VirusTotal | `VIRUSTOTAL_API_KEY` (shared with Threat Intelligence) | URL scan, submits if never seen before |
+| urlscan.io | Optional (`URLSCAN_API_KEY`) | Live scan: screenshot, redirect chain, landing IP/ASN. No key → scan is public/searchable on urlscan.io |
+| Spamhaus DBL | None | Free DNS blocklist lookup |
+| SURBL | None | Free DNS blocklist lookup (listed/not-listed only) |
+| URIBL | None | Free DNS blocklist lookup; rate-limit responses treated as inconclusive, not malicious |
+| SEM-URI | None | Free DNS blocklist lookup (Spam Eating Monkey) |
+| URLhaus | Required (`URLHAUS_AUTH_KEY`) | abuse.ch malware-distribution URL database |
+| RDAP domain age | None | Domains registered <30 days ago are flagged suspicious |
+| Google Safe Browsing | Optional (`GOOGLE_SAFE_BROWSING_API_KEY`) | Same blocklist Chrome/Firefox use |
+| PhishTank | Optional (`PHISHTANK_APP_KEY`) | Community phishing-URL database |
+| SPF/DMARC/DKIM | None | Missing SPF+DMARC, or DMARC `p=none`, flags the domain as easy to spoof |
+
+### Usage
+```bash
+curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  http://localhost:8001/api/url-intel/investigate \
+  -d '{"url":"https://suspicious-site.example/login"}'
+
+# Past investigations (report_text included, no re-scan needed)
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8001/api/url-intel/history
+
+# Which optional keys are configured
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8001/api/url-intel/stats
+```
+
+The UI (URL Scanner page) shows per-source results plus the generated
+report in a panel with **Copy to Clipboard**, **Download .txt**, and a
+**mailto:** button.
+
+### Managing API Keys
+Admin users can add or change `VIRUSTOTAL_API_KEY`, `ABUSEIPDB_API_KEY`,
+`URLSCAN_API_KEY`, `URLHAUS_AUTH_KEY`, `GOOGLE_SAFE_BROWSING_API_KEY`, and
+`PHISHTANK_APP_KEY` directly from the Threat Intel / URL Scanner pages —
+click "Add"/"Change" next to a source's status card. Saving applies the
+key immediately (no restart) and persists it to `.env` for future
+restarts. Every other role sees the same status cards read-only.
+
+### Investigation History
+Every investigation is saved (`url_investigations` table) — the
+Investigation History table on the URL Scanner page lists past scans with
+a "View Report" button that re-displays the saved report instantly,
+without re-querying any external source.
 
 ---
 
