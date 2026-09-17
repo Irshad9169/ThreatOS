@@ -1,5 +1,5 @@
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,7 +7,9 @@ from threatos.core.database import get_db
 from threatos.core.dependencies import get_current_user
 from threatos.models.ti_enrichment import TIEnrichment
 from threatos.models.user import User
-from threatos.services.url_intel_service import enrich_url, get_key_status
+from threatos.services.url_intel_service import (
+    enrich_url, get_investigation, get_key_status, list_investigations,
+)
 
 router = APIRouter()
 
@@ -30,6 +32,38 @@ async def investigate_url(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return result
+
+@router.get("/history")
+async def investigation_history(
+    limit: int = Query(50, ge=1, le=200),
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Past investigations, most recent first. Includes the full report_text
+    so a past report can be re-viewed without re-scanning."""
+    records = await list_investigations(db, limit=limit)
+    return [{
+        "id": r.id, "url": r.url, "domain": r.domain,
+        "overall_verdict": r.overall_verdict, "report_text": r.report_text,
+        "investigated_by": r.investigated_by,
+        "investigated_at": r.investigated_at.isoformat(),
+    } for r in records]
+
+@router.get("/history/{investigation_id}")
+async def investigation_detail(
+    investigation_id: str,
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    record = await get_investigation(db, investigation_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Investigation not found")
+    return {
+        "id": record.id, "url": record.url, "domain": record.domain,
+        "overall_verdict": record.overall_verdict, "report_text": record.report_text,
+        "investigated_by": record.investigated_by,
+        "investigated_at": record.investigated_at.isoformat(),
+    }
 
 @router.get("/stats")
 async def url_intel_stats(

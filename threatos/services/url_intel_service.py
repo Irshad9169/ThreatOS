@@ -4,13 +4,16 @@ import base64
 import hashlib
 import logging
 import os
+import uuid
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 import httpx
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from threatos.models.url_investigation import UrlInvestigation
 from threatos.services.settings_service import refresh_from_env_file
 from threatos.services.ti_service import (
     VERDICT_CLEAN, VERDICT_MALICIOUS, VERDICT_NO_KEY, VERDICT_SUSPICIOUS,
@@ -384,11 +387,35 @@ async def enrich_url(db: AsyncSession, raw_url: str,
     report_text = generate_investigation_report(
         url, domain, sources, overall, investigated_by, investigated_at)
 
+    record = UrlInvestigation(
+        id=str(uuid.uuid4()), url=url, domain=domain, overall_verdict=overall,
+        report_text=report_text, investigated_by=investigated_by,
+        investigated_at=investigated_at,
+    )
+    db.add(record)
+    await db.flush()
+
     return {
-        "url": url, "domain": domain, "overall_verdict": overall,
+        "id": record.id, "url": url, "domain": domain, "overall_verdict": overall,
         "sources": sources, "report_text": report_text,
         "investigated_at": investigated_at.isoformat(),
     }
+
+
+async def list_investigations(db: AsyncSession, limit: int = 50) -> list[UrlInvestigation]:
+    result = await db.execute(
+        select(UrlInvestigation)
+        .order_by(UrlInvestigation.investigated_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def get_investigation(db: AsyncSession, investigation_id: str) -> UrlInvestigation | None:
+    result = await db.execute(
+        select(UrlInvestigation).where(UrlInvestigation.id == investigation_id)
+    )
+    return result.scalar_one_or_none()
 
 
 def generate_investigation_report(url: str, domain: str, sources: dict,

@@ -20,11 +20,23 @@ interface SourceResult {
 }
 
 interface InvestigateResult {
+  id?: string
   url: string
   domain: string
   overall_verdict: string
-  sources: Record<string, SourceResult>
+  sources?: Record<string, SourceResult>
   report_text: string
+  investigated_at: string
+  investigated_by?: string | null
+}
+
+interface HistoryEntry {
+  id: string
+  url: string
+  domain: string
+  overall_verdict: string
+  report_text: string
+  investigated_by: string | null
   investigated_at: string
 }
 
@@ -128,11 +140,29 @@ export function UrlIntel() {
     queryFn:  () => apiClient.get<Stats>('/url-intel/stats').then(r => r.data),
   })
 
+  const history = useQuery({
+    queryKey: ['url-intel-history'],
+    queryFn:  () => apiClient.get<HistoryEntry[]>('/url-intel/history').then(r => r.data),
+  })
+
   const investigate = useMutation({
     mutationFn: (u: string) =>
       apiClient.post<InvestigateResult>('/url-intel/investigate', { url: u }).then(r => r.data),
-    onSuccess: (data) => { setResult(data); setCopied(false) },
+    onSuccess: (data) => {
+      setResult(data)
+      setCopied(false)
+      history.refetch()
+    },
   })
+
+  const handleViewHistoryEntry = (entry: HistoryEntry) => {
+    setResult({
+      id: entry.id, url: entry.url, domain: entry.domain,
+      overall_verdict: entry.overall_verdict, report_text: entry.report_text,
+      investigated_at: entry.investigated_at, investigated_by: entry.investigated_by,
+    })
+    setCopied(false)
+  }
 
   const handleInvestigate = () => {
     if (!url.trim()) return
@@ -233,7 +263,7 @@ export function UrlIntel() {
       </div>
 
       {result && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
           <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)',
             borderRadius: 8, padding: 16 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -246,9 +276,16 @@ export function UrlIntel() {
               </div>
               <VerdictBadge verdict={result.overall_verdict} />
             </div>
-            {Object.entries(result.sources).map(([key, data]) => (
-              <SourceCard key={key} title={key} data={data} />
-            ))}
+            {result.sources ? (
+              Object.entries(result.sources).map(([key, data]) => (
+                <SourceCard key={key} title={key} data={data} />
+              ))
+            ) : (
+              <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                Viewing a past investigation — per-source breakdown isn't stored separately,
+                see the full technical evidence in the report on the right.
+              </div>
+            )}
           </div>
 
           <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)',
@@ -284,6 +321,63 @@ export function UrlIntel() {
           </div>
         </div>
       )}
+
+      <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)',
+        borderRadius: 8, padding: 16 }}>
+        <h3 style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>
+          Investigation History ({history.data?.length ?? 0})
+        </h3>
+
+        {history.isLoading && (
+          <div style={{ color: 'var(--muted)', fontSize: 13, padding: '12px 0' }}>Loading...</div>
+        )}
+        {history.data?.length === 0 && (
+          <div style={{ color: 'var(--muted)', fontSize: 13, padding: '12px 0' }}>
+            No investigations yet. Run one above.
+          </div>
+        )}
+        {(history.data?.length ?? 0) > 0 && (
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                {['Domain', 'Verdict', 'Investigated By', 'Investigated At', ''].map(h => (
+                  <th key={h} style={{ textAlign: 'left', padding: '6px 10px',
+                    borderBottom: '1px solid var(--border)', fontSize: 10, color: 'var(--muted)',
+                    fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1 }}>
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {history.data?.map(entry => (
+                <tr key={entry.id} style={{ borderBottom: '1px solid var(--border)22' }}>
+                  <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 12 }}>
+                    {entry.domain}
+                  </td>
+                  <td style={{ padding: '7px 10px' }}>
+                    <VerdictBadge verdict={entry.overall_verdict} />
+                  </td>
+                  <td style={{ padding: '7px 10px', fontSize: 12 }}>
+                    {entry.investigated_by || '—'}
+                  </td>
+                  <td style={{ padding: '7px 10px', fontSize: 11, color: 'var(--muted)' }}>
+                    {new Date(entry.investigated_at).toLocaleString()}
+                  </td>
+                  <td style={{ padding: '7px 10px' }}>
+                    <button onClick={() => handleViewHistoryEntry(entry)}
+                      style={{ fontSize: 11, padding: '3px 10px', background: 'var(--bg3)',
+                        border: '1px solid var(--border)', borderRadius: 4, cursor: 'pointer',
+                        color: 'var(--accent)' }}>
+                      View Report
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   )
 }

@@ -21,7 +21,8 @@ from threatos.services.ti_service import (
 )
 from threatos.services.url_intel_service import (
     enrich_url, enrich_url_spamhaus, enrich_url_urlhaus, enrich_url_urlscan,
-    enrich_url_virustotal, generate_investigation_report, parse_url,
+    enrich_url_virustotal, generate_investigation_report, get_investigation,
+    list_investigations, parse_url,
 )
 
 
@@ -317,3 +318,40 @@ def test_report_clean_verdict_has_no_action_recommendation():
 
     assert "VERDICT: CLEAN" in report
     assert "No action required" in report
+
+
+# ── Investigation history ──────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_enrich_url_persists_investigation_row(db_session):
+    async def fake(db, *a, **kw): return {"source": "x", "verdict": VERDICT_CLEAN}
+    with patch("threatos.services.url_intel_service.enrich_url_virustotal", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_urlscan", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_spamhaus", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake):
+        result = await enrich_url(db_session, "https://persisted.example", investigated_by="analyst1")
+
+    assert result["id"]
+    record = await get_investigation(db_session, result["id"])
+    assert record is not None
+    assert record.url == "https://persisted.example"
+    assert record.domain == "persisted.example"
+    assert record.investigated_by == "analyst1"
+    assert record.report_text == result["report_text"]
+
+@pytest.mark.asyncio
+async def test_list_investigations_most_recent_first(db_session):
+    async def fake(db, *a, **kw): return {"source": "x", "verdict": VERDICT_CLEAN}
+    with patch("threatos.services.url_intel_service.enrich_url_virustotal", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_urlscan", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_spamhaus", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake):
+        await enrich_url(db_session, "https://first.example")
+        await enrich_url(db_session, "https://second.example")
+
+    records = await list_investigations(db_session)
+    assert [r.domain for r in records[:2]] == ["second.example", "first.example"]
+
+@pytest.mark.asyncio
+async def test_get_investigation_returns_none_when_missing(db_session):
+    assert await get_investigation(db_session, "not-a-real-id") is None

@@ -78,3 +78,40 @@ async def test_stats_reports_key_configuration(test_client: AsyncClient):
     assert "urlscan_key" in data
     assert "urlhaus_key" in data
     assert "total_cached" in data
+
+
+@pytest.mark.asyncio
+async def test_history_lists_past_investigation_without_rescanning(test_client: AsyncClient):
+    async def fake_vt(db, url):
+        return _fake_source("virustotal", VERDICT_MALICIOUS, malicious_engines=5, total_engines=90)
+    async def fake_urlscan(db, url, domain):
+        return _fake_source("urlscan", VERDICT_CLEAN)
+    async def fake_spamhaus(db, domain):
+        return _fake_source("spamhaus", VERDICT_CLEAN, reason="not listed")
+    async def fake_urlhaus(db, url):
+        return _fake_source("urlhaus", VERDICT_NO_KEY, message="no key configured")
+
+    with patch("threatos.services.url_intel_service.enrich_url_virustotal", fake_vt), \
+         patch("threatos.services.url_intel_service.enrich_url_urlscan", fake_urlscan), \
+         patch("threatos.services.url_intel_service.enrich_url_spamhaus", fake_spamhaus), \
+         patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake_urlhaus):
+        investigate_resp = await test_client.post(
+            "/api/url-intel/investigate", json={"url": "https://history-test.example/x"})
+    investigation_id = investigate_resp.json()["id"]
+
+    history_resp = await test_client.get("/api/url-intel/history")
+    assert history_resp.status_code == 200
+    entries = history_resp.json()
+    assert any(e["id"] == investigation_id for e in entries)
+    match = next(e for e in entries if e["id"] == investigation_id)
+    assert match["domain"] == "history-test.example"
+    assert "VERDICT: MALICIOUS" in match["report_text"]
+
+    detail_resp = await test_client.get(f"/api/url-intel/history/{investigation_id}")
+    assert detail_resp.status_code == 200
+    assert detail_resp.json()["report_text"] == match["report_text"]
+
+@pytest.mark.asyncio
+async def test_history_detail_404_on_missing(test_client: AsyncClient):
+    resp = await test_client.get("/api/url-intel/history/not-a-real-id")
+    assert resp.status_code == 404
