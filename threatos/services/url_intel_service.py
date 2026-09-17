@@ -300,8 +300,7 @@ async def enrich_url_spamhaus(db: AsyncSession, domain: str) -> dict:
     if code is None:
         verdict, reason = VERDICT_CLEAN, "not listed"
     else:
-        reason, verdict = _SPAMHAUS_CODES.get(code, (f"listed (unrecognized code {code})",
-                                                        VERDICT_SUSPICIOUS))
+        reason, verdict = _SPAMHAUS_CODES.get(code, ("unrecognized code", VERDICT_SUSPICIOUS))
 
     await save_enrichment(db, "domain", domain, "spamhaus", verdict,
                            raw_response={"code": code, "reason": reason})
@@ -671,6 +670,10 @@ async def enrich_url_phishtank(db: AsyncSession, url: str) -> dict:
             return {"source": "phishtank", "verdict": VERDICT_UNKNOWN,
                     "message": "PhishTank rate limit exceeded — add PHISHTANK_APP_KEY "
                                "for a higher limit"}
+        if resp.status_code == 403:
+            return {"source": "phishtank", "verdict": VERDICT_NO_KEY,
+                    "message": "PhishTank rejected the request (HTTP 403) — an app_key "
+                               "now appears to be required; add PHISHTANK_APP_KEY"}
         if resp.status_code != 200:
             return {"source": "phishtank", "verdict": VERDICT_UNKNOWN,
                     "message": f"PhishTank error: HTTP {resp.status_code}"}
@@ -966,7 +969,7 @@ def generate_investigation_report(url: str, domain: str, sources: dict,
             "1. Block this URL/domain at the email gateway, web proxy, and firewall.",
             "2. Do not click the link or open any attachment associated with it.",
             "3. If anyone already interacted with it, reset their credentials and scan "
-            "   the affected endpoint.",
+            "the affected endpoint.",
             "4. Report the sender/domain to your email security team for wider blocking.",
         ]
     elif overall_verdict == VERDICT_SUSPICIOUS:
@@ -979,7 +982,7 @@ def generate_investigation_report(url: str, domain: str, sources: dict,
         lines += [
             "1. No action required based on current data.",
             "2. Reputation can change — if this was reported as suspicious, keep treating "
-            "   the original report with normal caution.",
+            "the original report with normal caution.",
         ]
     else:
         missing = [s for s, d in sources.items() if d.get("verdict") == VERDICT_NO_KEY]

@@ -202,6 +202,17 @@ async def test_spamhaus_listed_as_phishing(db_session):
     assert "phishing" in result["reason"]
 
 @pytest.mark.asyncio
+async def test_spamhaus_unrecognized_code_reason_does_not_duplicate_code(db_session):
+    # Regression: the fallback reason previously embedded the code itself
+    # (e.g. "listed (unrecognized code 127.0.1.255)"), and the report
+    # generator appends " ({code})" again — producing a duplicated
+    # "listed (unrecognized code X) (X)" line.
+    with patch("dns.resolver.resolve", return_value=["127.0.1.255"]):
+        result = await enrich_url_spamhaus(db_session, "weird-code-domain.example")
+    assert result["verdict"] == VERDICT_SUSPICIOUS
+    assert result["code"] not in result["reason"]
+
+@pytest.mark.asyncio
 async def test_spamhaus_dns_error_returns_unknown(db_session):
     with patch("dns.resolver.resolve", side_effect=Exception("timeout")):
         result = await enrich_url_spamhaus(db_session, "unreachable-domain.example")
@@ -584,6 +595,21 @@ async def test_phishtank_rate_limited_returns_unknown(db_session):
     assert "rate limit" in result["message"]
 
 @pytest.mark.asyncio
+async def test_phishtank_403_reports_key_likely_required(db_session):
+    # PhishTank's auth policy appears to have tightened (observed live: a
+    # request with no app_key now gets HTTP 403) — confirm this degrades to
+    # a clear, actionable message rather than a generic "HTTP 403" string.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403)
+
+    with patch("threatos.services.url_intel_service.httpx.AsyncClient",
+               _mock_client_factory(handler)):
+        result = await enrich_url_phishtank(db_session, "https://forbidden.example")
+
+    assert result["verdict"] == VERDICT_NO_KEY
+    assert "app_key" in result["message"]
+
+@pytest.mark.asyncio
 async def test_phishtank_works_without_app_key(db_session, monkeypatch):
     monkeypatch.setattr("threatos.services.url_intel_service.PHISHTANK_APP_KEY", "")
 
@@ -682,6 +708,11 @@ def test_report_contains_expected_sections_for_malicious():
     assert "RECOMMENDATION" in report
     assert "Block this URL" in report
     assert "urlscan.io" in report.lower()
+    # Regression: string-concatenation continuation lines in the
+    # recommendation text previously left stray leading whitespace,
+    # producing "scan    the affected endpoint." (extra spaces mid-sentence).
+    assert "reset their credentials and scan the affected endpoint" in report
+    assert "  the" not in report
 
 def test_report_clean_verdict_has_no_action_recommendation():
     sources = {

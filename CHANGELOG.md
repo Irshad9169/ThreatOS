@@ -31,6 +31,15 @@ semantic version since this project doesn't yet cut versioned releases.
   API running multiple `uvicorn` worker processes (separate memory per
   process); added a re-sync step so a stale worker picks up a key written
   by another worker via the shared `.env` file, without needing a restart.
+- Spamhaus DBL report line duplicating an unrecognized listing code (e.g.
+  "listed (unrecognized code 127.0.1.255) (127.0.1.255)"), found in a live
+  investigation report.
+- PhishTank returning a raw "HTTP 403" message with no explanation — their
+  auth policy appears to have tightened to require `app_key` on every
+  request; now reported as a clear, actionable message.
+- Stray extra whitespace in two of the report's recommendation lines,
+  caused by a Python string-continuation formatting slip
+  ("...scan    the affected endpoint.").
 
 ## 2026-09-16 — Repo cleanup and test suite
 

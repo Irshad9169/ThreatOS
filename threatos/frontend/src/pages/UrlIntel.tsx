@@ -110,7 +110,7 @@ function SourceCard({ title, data }: { title: string; data: SourceResult }) {
       {data.source === 'spamhaus' && (
         <div style={{ fontSize: 11 }}>
           <span style={{ color: 'var(--muted)' }}>Status: </span>
-          {data.reason || (data.code ? `listed (${data.code})` : '—')}
+          {data.reason ? `${data.reason}${data.code ? ` (${data.code})` : ''}` : '—'}
         </div>
       )}
 
