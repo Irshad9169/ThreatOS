@@ -7,6 +7,7 @@ interface Stats {
   total_cached: number
   urlscan_key:  boolean
   urlhaus_key:  boolean
+  safe_browsing_key: boolean
   spamhaus:     string
 }
 
@@ -135,6 +136,13 @@ function SourceCard({ title, data }: { title: string; data: SourceResult }) {
         </div>
       )}
 
+      {data.source === 'safe_browsing' && data.threat_types?.length > 0 && (
+        <div style={{ fontSize: 11 }}>
+          <span style={{ color: 'var(--muted)' }}>Listed as: </span>
+          {data.threat_types.join(', ')}
+        </div>
+      )}
+
       {data.cached && (
         <div style={{ fontSize: 10, color: 'var(--muted)', fontStyle: 'italic', marginTop: 4 }}>
           cached
@@ -214,7 +222,8 @@ export function UrlIntel() {
         <div>
           <h1 style={{ fontSize: 20, fontWeight: 700 }}>URL Scanner</h1>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
-            Investigate a suspicious URL against VirusTotal, urlscan.io, Spamhaus, URLhaus, and domain age (RDAP)
+            Investigate a suspicious URL against VirusTotal, urlscan.io, Spamhaus, URLhaus,
+            domain age (RDAP), and Google Safe Browsing
           </div>
         </div>
       </div>
@@ -225,6 +234,9 @@ export function UrlIntel() {
             signupUrl="https://urlscan.io/user/signup" />
           <ApiKeyCard keyName="URLHAUS_AUTH_KEY" label="URLhaus" configured={s.urlhaus_key}
             signupUrl="https://auth.abuse.ch/" />
+          <ApiKeyCard keyName="GOOGLE_SAFE_BROWSING_API_KEY" label="Safe Browsing"
+            configured={s.safe_browsing_key}
+            signupUrl="https://console.cloud.google.com/apis/library/safebrowsing.googleapis.com" />
           <div style={{
             background: 'var(--bg2)', border: '1px solid #a6e3a144',
             borderRadius: 8, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10,

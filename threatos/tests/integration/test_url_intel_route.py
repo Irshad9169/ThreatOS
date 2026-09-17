@@ -56,12 +56,15 @@ async def test_investigate_returns_report_and_verdict(test_client: AsyncClient):
         return _fake_source("urlhaus", VERDICT_NO_KEY, message="no key configured")
     async def fake_rdap(db, domain):
         return _fake_source("rdap", VERDICT_CLEAN, age_days=3650, registered_at="2015-01-01T00:00:00Z")
+    async def fake_gsb(db, url):
+        return _fake_source("safe_browsing", VERDICT_NO_KEY, message="no key configured")
 
     with patch("threatos.services.url_intel_service.enrich_url_virustotal", fake_vt), \
          patch("threatos.services.url_intel_service.enrich_url_urlscan", fake_urlscan), \
          patch("threatos.services.url_intel_service.enrich_url_spamhaus", fake_spamhaus), \
          patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake_urlhaus), \
-         patch("threatos.services.url_intel_service.enrich_url_domain_age", fake_rdap):
+         patch("threatos.services.url_intel_service.enrich_url_domain_age", fake_rdap), \
+         patch("threatos.services.url_intel_service.enrich_url_safe_browsing", fake_gsb):
         resp = await test_client.post(
             "/api/url-intel/investigate", json={"url": "https://phish.example/login"})
 
@@ -70,7 +73,7 @@ async def test_investigate_returns_report_and_verdict(test_client: AsyncClient):
     assert data["overall_verdict"] == VERDICT_MALICIOUS
     assert data["domain"] == "phish.example"
     assert "VERDICT: MALICIOUS" in data["report_text"]
-    assert set(data["sources"]) == {"virustotal", "urlscan", "spamhaus", "urlhaus", "rdap"}
+    assert set(data["sources"]) == {"virustotal", "urlscan", "spamhaus", "urlhaus", "rdap", "safe_browsing"}
 
 
 @pytest.mark.asyncio
@@ -80,6 +83,7 @@ async def test_stats_reports_key_configuration(test_client: AsyncClient):
     data = resp.json()
     assert "urlscan_key" in data
     assert "urlhaus_key" in data
+    assert "safe_browsing_key" in data
     assert "total_cached" in data
 
 
@@ -95,12 +99,15 @@ async def test_history_lists_past_investigation_without_rescanning(test_client: 
         return _fake_source("urlhaus", VERDICT_NO_KEY, message="no key configured")
     async def fake_rdap(db, domain):
         return _fake_source("rdap", VERDICT_CLEAN, age_days=3650, registered_at="2015-01-01T00:00:00Z")
+    async def fake_gsb(db, url):
+        return _fake_source("safe_browsing", VERDICT_NO_KEY, message="no key configured")
 
     with patch("threatos.services.url_intel_service.enrich_url_virustotal", fake_vt), \
          patch("threatos.services.url_intel_service.enrich_url_urlscan", fake_urlscan), \
          patch("threatos.services.url_intel_service.enrich_url_spamhaus", fake_spamhaus), \
          patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake_urlhaus), \
-         patch("threatos.services.url_intel_service.enrich_url_domain_age", fake_rdap):
+         patch("threatos.services.url_intel_service.enrich_url_domain_age", fake_rdap), \
+         patch("threatos.services.url_intel_service.enrich_url_safe_browsing", fake_gsb):
         investigate_resp = await test_client.post(
             "/api/url-intel/investigate", json={"url": "https://history-test.example/x"})
     investigation_id = investigate_resp.json()["id"]

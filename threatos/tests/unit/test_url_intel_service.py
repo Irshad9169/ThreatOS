@@ -20,9 +20,10 @@ from threatos.services.ti_service import (
     VERDICT_UNKNOWN,
 )
 from threatos.services.url_intel_service import (
-    enrich_url, enrich_url_domain_age, enrich_url_spamhaus, enrich_url_urlhaus,
-    enrich_url_urlscan, enrich_url_virustotal, generate_investigation_report,
-    get_investigation, list_investigations, parse_url,
+    enrich_url, enrich_url_domain_age, enrich_url_safe_browsing,
+    enrich_url_spamhaus, enrich_url_urlhaus, enrich_url_urlscan,
+    enrich_url_virustotal, generate_investigation_report, get_investigation,
+    list_investigations, parse_url,
 )
 
 
@@ -329,6 +330,76 @@ async def test_rdap_uses_cache_on_second_call(db_session):
     assert result2["cached"] is True
 
 
+# ── Google Safe Browsing ──────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_safe_browsing_no_key_returns_no_api_key(db_session, monkeypatch):
+    monkeypatch.setattr("threatos.services.url_intel_service.GSB_API_KEY", "")
+    result = await enrich_url_safe_browsing(db_session, "https://example.com")
+    assert result["verdict"] == VERDICT_NO_KEY
+
+@pytest.mark.asyncio
+async def test_safe_browsing_flagged_url_is_malicious(db_session, monkeypatch):
+    monkeypatch.setattr("threatos.services.url_intel_service.GSB_API_KEY", "test-key")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["key"] == "test-key"
+        return httpx.Response(200, json={"matches": [
+            {"threatType": "SOCIAL_ENGINEERING", "platformType": "ANY_PLATFORM",
+             "threat": {"url": "https://phish.example"}, "cacheDuration": "300.000s"},
+        ]})
+
+    with patch("threatos.services.url_intel_service.httpx.AsyncClient",
+               _mock_client_factory(handler)):
+        result = await enrich_url_safe_browsing(db_session, "https://phish.example")
+
+    assert result["verdict"] == VERDICT_MALICIOUS
+    assert result["threat_types"] == ["SOCIAL_ENGINEERING"]
+
+@pytest.mark.asyncio
+async def test_safe_browsing_clean_url_returns_empty_object(db_session, monkeypatch):
+    monkeypatch.setattr("threatos.services.url_intel_service.GSB_API_KEY", "test-key")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={})
+
+    with patch("threatos.services.url_intel_service.httpx.AsyncClient",
+               _mock_client_factory(handler)):
+        result = await enrich_url_safe_browsing(db_session, "https://clean.example")
+
+    assert result["verdict"] == VERDICT_CLEAN
+
+@pytest.mark.asyncio
+async def test_safe_browsing_invalid_key_returns_no_api_key(db_session, monkeypatch):
+    monkeypatch.setattr("threatos.services.url_intel_service.GSB_API_KEY", "bad-key")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403)
+
+    with patch("threatos.services.url_intel_service.httpx.AsyncClient",
+               _mock_client_factory(handler)):
+        result = await enrich_url_safe_browsing(db_session, "https://example.com")
+
+    assert result["verdict"] == VERDICT_NO_KEY
+
+@pytest.mark.asyncio
+async def test_safe_browsing_uses_cache_on_second_call(db_session, monkeypatch):
+    monkeypatch.setattr("threatos.services.url_intel_service.GSB_API_KEY", "test-key")
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, json={})
+
+    with patch("threatos.services.url_intel_service.httpx.AsyncClient",
+               _mock_client_factory(handler)):
+        await enrich_url_safe_browsing(db_session, "https://cached.example")
+        result2 = await enrich_url_safe_browsing(db_session, "https://cached.example")
+
+    assert calls["n"] == 1
+    assert result2["cached"] is True
+
+
 # ── Combined enrichment ───────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -344,12 +415,15 @@ async def test_enrich_url_worst_verdict_wins(db_session):
     async def fake_urlhaus(db, url): return {"source": "urlhaus", "verdict": VERDICT_NO_KEY, "message": "no key"}
     async def fake_rdap(db, domain): return {"source": "rdap", "verdict": VERDICT_CLEAN,
                                               "age_days": 3650, "registered_at": "2015-01-01T00:00:00Z"}
+    async def fake_gsb(db, url): return {"source": "safe_browsing", "verdict": VERDICT_NO_KEY,
+                                          "message": "no key"}
 
     with patch("threatos.services.url_intel_service.enrich_url_virustotal", fake_vt), \
          patch("threatos.services.url_intel_service.enrich_url_urlscan", fake_urlscan), \
          patch("threatos.services.url_intel_service.enrich_url_spamhaus", fake_spamhaus), \
          patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake_urlhaus), \
-         patch("threatos.services.url_intel_service.enrich_url_domain_age", fake_rdap):
+         patch("threatos.services.url_intel_service.enrich_url_domain_age", fake_rdap), \
+         patch("threatos.services.url_intel_service.enrich_url_safe_browsing", fake_gsb):
         result = await enrich_url(db_session, "https://mixed.example", investigated_by="analyst1")
 
     assert result["overall_verdict"] == VERDICT_MALICIOUS
@@ -408,7 +482,8 @@ async def test_enrich_url_persists_investigation_row(db_session):
          patch("threatos.services.url_intel_service.enrich_url_urlscan", fake), \
          patch("threatos.services.url_intel_service.enrich_url_spamhaus", fake), \
          patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake), \
-         patch("threatos.services.url_intel_service.enrich_url_domain_age", fake):
+         patch("threatos.services.url_intel_service.enrich_url_domain_age", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_safe_browsing", fake):
         result = await enrich_url(db_session, "https://persisted.example", investigated_by="analyst1")
 
     assert result["id"]
@@ -426,7 +501,8 @@ async def test_list_investigations_most_recent_first(db_session):
          patch("threatos.services.url_intel_service.enrich_url_urlscan", fake), \
          patch("threatos.services.url_intel_service.enrich_url_spamhaus", fake), \
          patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake), \
-         patch("threatos.services.url_intel_service.enrich_url_domain_age", fake):
+         patch("threatos.services.url_intel_service.enrich_url_domain_age", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_safe_browsing", fake):
         await enrich_url(db_session, "https://first.example")
         await enrich_url(db_session, "https://second.example")
 

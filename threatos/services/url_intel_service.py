@@ -23,10 +23,11 @@ from threatos.services.ti_service import (
 log = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-VT_API_KEY        = os.environ.get("VIRUSTOTAL_API_KEY", "")
-URLSCAN_API_KEY    = os.environ.get("URLSCAN_API_KEY", "")
-URLHAUS_AUTH_KEY   = os.environ.get("URLHAUS_AUTH_KEY", "")
-TI_TIMEOUT         = int(os.environ.get("TI_TIMEOUT_SECONDS", "10"))
+VT_API_KEY          = os.environ.get("VIRUSTOTAL_API_KEY", "")
+URLSCAN_API_KEY      = os.environ.get("URLSCAN_API_KEY", "")
+URLHAUS_AUTH_KEY     = os.environ.get("URLHAUS_AUTH_KEY", "")
+GSB_API_KEY          = os.environ.get("GOOGLE_SAFE_BROWSING_API_KEY", "")
+TI_TIMEOUT           = int(os.environ.get("TI_TIMEOUT_SECONDS", "10"))
 
 _URLSCAN_POLL_DELAY_S   = 15   # initial wait before first poll
 _URLSCAN_POLL_INTERVAL  = 5    # seconds between polls
@@ -424,6 +425,70 @@ async def enrich_url_domain_age(db: AsyncSession, domain: str) -> dict:
         return {"source": "rdap", "verdict": VERDICT_UNKNOWN, "message": str(exc)}
 
 
+# ── Google Safe Browsing ──────────────────────────────────────────────────────
+_GSB_THREAT_TYPES = ["MALWARE", "SOCIAL_ENGINEERING", "UNWANTED_SOFTWARE",
+                     "POTENTIALLY_HARMFUL_APPLICATION"]
+
+async def enrich_url_safe_browsing(db: AsyncSession, url: str) -> dict:
+    if not GSB_API_KEY:
+        return {"source": "safe_browsing", "verdict": VERDICT_NO_KEY,
+                "message": "Set GOOGLE_SAFE_BROWSING_API_KEY in .env"}
+
+    cache_key = _cache_key_for_url(url)
+    cached = await get_cached_enrichment(db, "url", cache_key)
+    gsb_cache = [c for c in cached if c.source == "safe_browsing"]
+    if gsb_cache:
+        c = gsb_cache[0]
+        rr = c.raw_response or {}
+        return {"source": "safe_browsing", "verdict": c.verdict,
+                "threat_types": rr.get("threat_types", []), "cached": True}
+
+    body = {
+        "client": {"clientId": "threatos", "clientVersion": "0.1.0"},
+        "threatInfo": {
+            "threatTypes": _GSB_THREAT_TYPES,
+            "platformTypes": ["ANY_PLATFORM"],
+            "threatEntryTypes": ["URL"],
+            "threatEntries": [{"url": url}],
+        },
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=TI_TIMEOUT) as client:
+            resp = await client.post(
+                "https://safebrowsing.googleapis.com/v4/threatMatches:find",
+                params={"key": GSB_API_KEY}, json=body,
+            )
+
+        if resp.status_code == 403:
+            return {"source": "safe_browsing", "verdict": VERDICT_NO_KEY,
+                    "message": "Invalid Google Safe Browsing API key, or the API isn't "
+                               "enabled on the associated GCP project"}
+        if resp.status_code == 429:
+            return {"source": "safe_browsing", "verdict": VERDICT_UNKNOWN,
+                    "message": "Google Safe Browsing quota exceeded"}
+        if resp.status_code != 200:
+            return {"source": "safe_browsing", "verdict": VERDICT_UNKNOWN,
+                    "message": f"Google Safe Browsing error: HTTP {resp.status_code}"}
+
+        matches = resp.json().get("matches") or []
+        threat_types = sorted({m.get("threatType") for m in matches if m.get("threatType")})
+        verdict = VERDICT_MALICIOUS if matches else VERDICT_CLEAN
+
+        await save_enrichment(db, "url", cache_key, "safe_browsing", verdict,
+                               raw_response={"threat_types": threat_types})
+
+        return {"source": "safe_browsing", "verdict": verdict,
+                "threat_types": threat_types, "cached": False}
+
+    except httpx.TimeoutException:
+        return {"source": "safe_browsing", "verdict": VERDICT_UNKNOWN,
+                "message": "Google Safe Browsing request timed out"}
+    except Exception as exc:
+        log.error("Google Safe Browsing enrichment failed: %s", exc)
+        return {"source": "safe_browsing", "verdict": VERDICT_UNKNOWN, "message": str(exc)}
+
+
 # ── Combined enrichment + report ─────────────────────────────────────────────
 def _overall_verdict(verdicts: list[str]) -> str:
     if VERDICT_MALICIOUS in verdicts:  return VERDICT_MALICIOUS
@@ -442,6 +507,7 @@ async def enrich_url(db: AsyncSession, raw_url: str,
     sources["spamhaus"]   = await enrich_url_spamhaus(db, domain)
     sources["urlhaus"]    = await enrich_url_urlhaus(db, url)
     sources["rdap"]       = await enrich_url_domain_age(db, domain)
+    sources["safe_browsing"] = await enrich_url_safe_browsing(db, url)
 
     overall = _overall_verdict([s.get("verdict", VERDICT_UNKNOWN) for s in sources.values()])
     investigated_at = datetime.now(UTC)
@@ -604,6 +670,18 @@ def generate_investigation_report(url: str, domain: str, sources: dict,
         lines.append(f"  {rd.get('message', 'Not checked')}")
     lines.append("")
 
+    gsb = sources.get("safe_browsing", {})
+    lines.append("[Google Safe Browsing]")
+    if gsb.get("verdict") == VERDICT_NO_KEY:
+        lines.append(f"  {gsb.get('message', 'Not checked')}")
+    elif gsb.get("threat_types"):
+        lines.append(f"  Status           : LISTED — {', '.join(gsb['threat_types'])}")
+    elif gsb.get("verdict") == VERDICT_CLEAN:
+        lines.append("  Status           : NOT LISTED")
+    else:
+        lines.append(f"  {gsb.get('message', 'No result')}")
+    lines.append("")
+
     lines.append("RECOMMENDATION")
     lines.append(dash)
     if overall_verdict == VERDICT_MALICIOUS:
@@ -643,8 +721,9 @@ def generate_investigation_report(url: str, domain: str, sources: dict,
 
 
 def get_key_status() -> dict:
-    """Whether urlscan.io/URLhaus keys are configured — read live from this
-    module's own globals (refreshed first) rather than a stale copy someone
-    else might have imported at process-startup time."""
+    """Whether urlscan.io/URLhaus/Safe Browsing keys are configured — read
+    live from this module's own globals (refreshed first) rather than a
+    stale copy someone else might have imported at process-startup time."""
     refresh_from_env_file()
-    return {"urlscan_key": bool(URLSCAN_API_KEY), "urlhaus_key": bool(URLHAUS_AUTH_KEY)}
+    return {"urlscan_key": bool(URLSCAN_API_KEY), "urlhaus_key": bool(URLHAUS_AUTH_KEY),
+            "safe_browsing_key": bool(GSB_API_KEY)}

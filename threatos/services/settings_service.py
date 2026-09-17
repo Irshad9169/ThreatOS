@@ -21,6 +21,9 @@ _MANAGED_KEYS: dict[str, list[tuple[str, str]]] = {
     "URLHAUS_AUTH_KEY": [
         ("threatos.services.url_intel_service", "URLHAUS_AUTH_KEY"),
     ],
+    "GOOGLE_SAFE_BROWSING_API_KEY": [
+        ("threatos.services.url_intel_service", "GSB_API_KEY"),
+    ],
 }
 
 _ENV_PATH = Path(".env")

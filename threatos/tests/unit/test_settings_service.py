@@ -29,10 +29,12 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(url_intel_service, "VT_API_KEY", url_intel_service.VT_API_KEY)
     monkeypatch.setattr(url_intel_service, "URLSCAN_API_KEY", url_intel_service.URLSCAN_API_KEY)
     monkeypatch.setattr(url_intel_service, "URLHAUS_AUTH_KEY", url_intel_service.URLHAUS_AUTH_KEY)
+    monkeypatch.setattr(url_intel_service, "GSB_API_KEY", url_intel_service.GSB_API_KEY)
     monkeypatch.delenv("VIRUSTOTAL_API_KEY", raising=False)
     monkeypatch.delenv("ABUSEIPDB_API_KEY", raising=False)
     monkeypatch.delenv("URLSCAN_API_KEY", raising=False)
     monkeypatch.delenv("URLHAUS_AUTH_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_SAFE_BROWSING_API_KEY", raising=False)
 
 
 def test_rejects_unmanaged_key():
@@ -100,7 +102,7 @@ def test_get_api_key_status_reflects_file_without_local_set_api_key_call(tmp_pat
 def test_url_intel_get_key_status_reflects_file_directly(tmp_path):
     (tmp_path / ".env").write_text("URLSCAN_API_KEY=from-file\nURLHAUS_AUTH_KEY=also-from-file\n")
     status = url_intel_service.get_key_status()
-    assert status == {"urlscan_key": True, "urlhaus_key": True}
+    assert status == {"urlscan_key": True, "urlhaus_key": True, "safe_browsing_key": False}
 
 def test_refresh_does_not_overwrite_with_blank_env_lines(tmp_path):
     set_api_key("URLSCAN_API_KEY", "keep-me")
