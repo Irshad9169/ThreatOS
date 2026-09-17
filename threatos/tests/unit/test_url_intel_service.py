@@ -20,10 +20,11 @@ from threatos.services.ti_service import (
     VERDICT_UNKNOWN,
 )
 from threatos.services.url_intel_service import (
-    enrich_url, enrich_url_domain_age, enrich_url_safe_browsing,
-    enrich_url_spamhaus, enrich_url_urlhaus, enrich_url_urlscan,
-    enrich_url_virustotal, generate_investigation_report, get_investigation,
-    list_investigations, parse_url,
+    enrich_url, enrich_url_domain_age, enrich_url_phishtank,
+    enrich_url_safe_browsing, enrich_url_spamhaus, enrich_url_surbl,
+    enrich_url_urlhaus, enrich_url_urlscan, enrich_url_virustotal,
+    generate_investigation_report, get_investigation, list_investigations,
+    parse_url,
 )
 
 
@@ -400,6 +401,119 @@ async def test_safe_browsing_uses_cache_on_second_call(db_session, monkeypatch):
     assert result2["cached"] is True
 
 
+# ── SURBL ─────────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_surbl_not_listed(db_session):
+    with patch("dns.resolver.resolve", side_effect=dns.resolver.NXDOMAIN()):
+        result = await enrich_url_surbl(db_session, "clean-domain.example")
+    assert result["verdict"] == VERDICT_CLEAN
+
+@pytest.mark.asyncio
+async def test_surbl_listed_is_malicious(db_session):
+    with patch("dns.resolver.resolve", return_value=["127.0.0.8"]):
+        result = await enrich_url_surbl(db_session, "bad-domain.example")
+    assert result["verdict"] == VERDICT_MALICIOUS
+    assert result["code"] == "127.0.0.8"
+
+@pytest.mark.asyncio
+async def test_surbl_dns_error_returns_unknown(db_session):
+    with patch("dns.resolver.resolve", side_effect=Exception("timeout")):
+        result = await enrich_url_surbl(db_session, "unreachable-domain.example")
+    assert result["verdict"] == VERDICT_UNKNOWN
+
+@pytest.mark.asyncio
+async def test_surbl_uses_cache_on_second_call(db_session):
+    with patch("dns.resolver.resolve", return_value=["127.0.0.8"]) as mocked:
+        await enrich_url_surbl(db_session, "cached-bad-domain.example")
+        result2 = await enrich_url_surbl(db_session, "cached-bad-domain.example")
+    assert mocked.call_count == 1
+    assert result2["cached"] is True
+
+
+# ── PhishTank ─────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_phishtank_verified_phish_is_malicious(db_session):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"results": {
+            "in_database": True, "verified": True, "valid": True,
+            "phish_id": "12345", "phish_detail_page": "https://phishtank.org/phish_detail.php?phish_id=12345",
+        }})
+
+    with patch("threatos.services.url_intel_service.httpx.AsyncClient",
+               _mock_client_factory(handler)):
+        result = await enrich_url_phishtank(db_session, "https://phish.example")
+
+    assert result["verdict"] == VERDICT_MALICIOUS
+    assert result["phish_id"] == "12345"
+
+@pytest.mark.asyncio
+async def test_phishtank_unverified_report_is_suspicious(db_session):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"results": {
+            "in_database": True, "verified": False, "valid": False, "phish_id": "999",
+        }})
+
+    with patch("threatos.services.url_intel_service.httpx.AsyncClient",
+               _mock_client_factory(handler)):
+        result = await enrich_url_phishtank(db_session, "https://maybe-phish.example")
+
+    assert result["verdict"] == VERDICT_SUSPICIOUS
+
+@pytest.mark.asyncio
+async def test_phishtank_not_in_database_returns_unknown(db_session):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"results": {"in_database": False}})
+
+    with patch("threatos.services.url_intel_service.httpx.AsyncClient",
+               _mock_client_factory(handler)):
+        result = await enrich_url_phishtank(db_session, "https://clean.example")
+
+    assert result["verdict"] == VERDICT_UNKNOWN
+
+@pytest.mark.asyncio
+async def test_phishtank_rate_limited_returns_unknown(db_session):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(509)
+
+    with patch("threatos.services.url_intel_service.httpx.AsyncClient",
+               _mock_client_factory(handler)):
+        result = await enrich_url_phishtank(db_session, "https://throttled.example")
+
+    assert result["verdict"] == VERDICT_UNKNOWN
+    assert "rate limit" in result["message"]
+
+@pytest.mark.asyncio
+async def test_phishtank_works_without_app_key(db_session, monkeypatch):
+    monkeypatch.setattr("threatos.services.url_intel_service.PHISHTANK_APP_KEY", "")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "app_key" not in request.content.decode()
+        return httpx.Response(200, json={"results": {"in_database": False}})
+
+    with patch("threatos.services.url_intel_service.httpx.AsyncClient",
+               _mock_client_factory(handler)):
+        result = await enrich_url_phishtank(db_session, "https://example.com")
+
+    assert result["verdict"] == VERDICT_UNKNOWN
+
+@pytest.mark.asyncio
+async def test_phishtank_uses_cache_on_second_call(db_session):
+    calls = {"n": 0}
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, json={"results": {"in_database": False}})
+
+    with patch("threatos.services.url_intel_service.httpx.AsyncClient",
+               _mock_client_factory(handler)):
+        await enrich_url_phishtank(db_session, "https://cached.example")
+        result2 = await enrich_url_phishtank(db_session, "https://cached.example")
+
+    assert calls["n"] == 1
+    assert result2["cached"] is True
+
+
 # ── Combined enrichment ───────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -417,13 +531,18 @@ async def test_enrich_url_worst_verdict_wins(db_session):
                                               "age_days": 3650, "registered_at": "2015-01-01T00:00:00Z"}
     async def fake_gsb(db, url): return {"source": "safe_browsing", "verdict": VERDICT_NO_KEY,
                                           "message": "no key"}
+    async def fake_surbl(db, domain): return {"source": "surbl", "verdict": VERDICT_CLEAN}
+    async def fake_pt(db, url): return {"source": "phishtank", "verdict": VERDICT_UNKNOWN,
+                                         "message": "not found"}
 
     with patch("threatos.services.url_intel_service.enrich_url_virustotal", fake_vt), \
          patch("threatos.services.url_intel_service.enrich_url_urlscan", fake_urlscan), \
          patch("threatos.services.url_intel_service.enrich_url_spamhaus", fake_spamhaus), \
          patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake_urlhaus), \
          patch("threatos.services.url_intel_service.enrich_url_domain_age", fake_rdap), \
-         patch("threatos.services.url_intel_service.enrich_url_safe_browsing", fake_gsb):
+         patch("threatos.services.url_intel_service.enrich_url_safe_browsing", fake_gsb), \
+         patch("threatos.services.url_intel_service.enrich_url_surbl", fake_surbl), \
+         patch("threatos.services.url_intel_service.enrich_url_phishtank", fake_pt):
         result = await enrich_url(db_session, "https://mixed.example", investigated_by="analyst1")
 
     assert result["overall_verdict"] == VERDICT_MALICIOUS
@@ -483,7 +602,9 @@ async def test_enrich_url_persists_investigation_row(db_session):
          patch("threatos.services.url_intel_service.enrich_url_spamhaus", fake), \
          patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake), \
          patch("threatos.services.url_intel_service.enrich_url_domain_age", fake), \
-         patch("threatos.services.url_intel_service.enrich_url_safe_browsing", fake):
+         patch("threatos.services.url_intel_service.enrich_url_safe_browsing", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_surbl", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_phishtank", fake):
         result = await enrich_url(db_session, "https://persisted.example", investigated_by="analyst1")
 
     assert result["id"]
@@ -502,7 +623,9 @@ async def test_list_investigations_most_recent_first(db_session):
          patch("threatos.services.url_intel_service.enrich_url_spamhaus", fake), \
          patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake), \
          patch("threatos.services.url_intel_service.enrich_url_domain_age", fake), \
-         patch("threatos.services.url_intel_service.enrich_url_safe_browsing", fake):
+         patch("threatos.services.url_intel_service.enrich_url_safe_browsing", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_surbl", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_phishtank", fake):
         await enrich_url(db_session, "https://first.example")
         await enrich_url(db_session, "https://second.example")
 

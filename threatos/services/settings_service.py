@@ -24,6 +24,9 @@ _MANAGED_KEYS: dict[str, list[tuple[str, str]]] = {
     "GOOGLE_SAFE_BROWSING_API_KEY": [
         ("threatos.services.url_intel_service", "GSB_API_KEY"),
     ],
+    "PHISHTANK_APP_KEY": [
+        ("threatos.services.url_intel_service", "PHISHTANK_APP_KEY"),
+    ],
 }
 
 _ENV_PATH = Path(".env")

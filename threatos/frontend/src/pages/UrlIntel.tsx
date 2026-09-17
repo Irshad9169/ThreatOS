@@ -8,6 +8,7 @@ interface Stats {
   urlscan_key:  boolean
   urlhaus_key:  boolean
   safe_browsing_key: boolean
+  phishtank_key: boolean
   spamhaus:     string
 }
 
@@ -113,6 +114,13 @@ function SourceCard({ title, data }: { title: string; data: SourceResult }) {
         </div>
       )}
 
+      {data.source === 'surbl' && (
+        <div style={{ fontSize: 11 }}>
+          <span style={{ color: 'var(--muted)' }}>Status: </span>
+          {data.code ? `listed (${data.code})` : 'not listed'}
+        </div>
+      )}
+
       {data.source === 'urlhaus' && data.threat && (
         <div style={{ fontSize: 11 }}>
           <span style={{ color: 'var(--muted)' }}>Threat: </span>{data.threat}
@@ -140,6 +148,20 @@ function SourceCard({ title, data }: { title: string; data: SourceResult }) {
         <div style={{ fontSize: 11 }}>
           <span style={{ color: 'var(--muted)' }}>Listed as: </span>
           {data.threat_types.join(', ')}
+        </div>
+      )}
+
+      {data.source === 'phishtank' && data.phish_id && (
+        <div style={{ fontSize: 11 }}>
+          <span style={{ color: 'var(--muted)' }}>Phish ID: </span>{data.phish_id}
+          {data.verified && <span style={{ color: '#a6e3a1' }}> (verified)</span>}
+          {data.detail_url && (
+            <>
+              {' · '}
+              <a href={data.detail_url} target="_blank" rel="noopener noreferrer"
+                style={{ color: 'var(--accent)' }}>detail ↗</a>
+            </>
+          )}
         </div>
       )}
 
@@ -222,8 +244,8 @@ export function UrlIntel() {
         <div>
           <h1 style={{ fontSize: 20, fontWeight: 700 }}>URL Scanner</h1>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
-            Investigate a suspicious URL against VirusTotal, urlscan.io, Spamhaus, URLhaus,
-            domain age (RDAP), and Google Safe Browsing
+            Investigate a suspicious URL against VirusTotal, urlscan.io, Spamhaus, SURBL,
+            URLhaus, domain age (RDAP), Google Safe Browsing, and PhishTank
           </div>
         </div>
       </div>
@@ -237,6 +259,9 @@ export function UrlIntel() {
           <ApiKeyCard keyName="GOOGLE_SAFE_BROWSING_API_KEY" label="Safe Browsing"
             configured={s.safe_browsing_key}
             signupUrl="https://console.cloud.google.com/apis/library/safebrowsing.googleapis.com" />
+          <ApiKeyCard keyName="PHISHTANK_APP_KEY" label="PhishTank" configured={s.phishtank_key}
+            signupUrl="https://phishtank.org/"
+            hint="Works without a key too (stricter rate limit)" />
           <div style={{
             background: 'var(--bg2)', border: '1px solid #a6e3a144',
             borderRadius: 8, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10,
@@ -244,6 +269,16 @@ export function UrlIntel() {
             <span style={{ fontSize: 16 }}>✅</span>
             <div>
               <div style={{ fontSize: 13, fontWeight: 600 }}>Spamhaus DBL</div>
+              <div style={{ fontSize: 11, color: 'var(--muted)' }}>No key required (DNS-based)</div>
+            </div>
+          </div>
+          <div style={{
+            background: 'var(--bg2)', border: '1px solid #a6e3a144',
+            borderRadius: 8, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10,
+          }}>
+            <span style={{ fontSize: 16 }}>✅</span>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>SURBL</div>
               <div style={{ fontSize: 11, color: 'var(--muted)' }}>No key required (DNS-based)</div>
             </div>
           </div>

@@ -27,6 +27,7 @@ VT_API_KEY          = os.environ.get("VIRUSTOTAL_API_KEY", "")
 URLSCAN_API_KEY      = os.environ.get("URLSCAN_API_KEY", "")
 URLHAUS_AUTH_KEY     = os.environ.get("URLHAUS_AUTH_KEY", "")
 GSB_API_KEY          = os.environ.get("GOOGLE_SAFE_BROWSING_API_KEY", "")
+PHISHTANK_APP_KEY    = os.environ.get("PHISHTANK_APP_KEY", "")
 TI_TIMEOUT           = int(os.environ.get("TI_TIMEOUT_SECONDS", "10"))
 
 _URLSCAN_POLL_DELAY_S   = 15   # initial wait before first poll
@@ -268,11 +269,12 @@ _SPAMHAUS_CODES = {
     "127.0.1.105": ("compromised legitimate — botnet C2",VERDICT_SUSPICIOUS),
 }
 
-def _query_dbl_sync(domain: str) -> tuple[str | None, str | None]:
-    """Blocking DNS lookup. Returns (code, error_message)."""
+def _query_dnsbl_sync(domain: str, zone: str) -> tuple[str | None, str | None]:
+    """Blocking DNSBL A-record lookup against `<domain>.<zone>`. Returns
+    (code, error_message); code is None (no error) when NXDOMAIN (not listed)."""
     import dns.resolver
     try:
-        answers = dns.resolver.resolve(f"{domain}.dbl.spamhaus.org", "A", lifetime=TI_TIMEOUT)
+        answers = dns.resolver.resolve(f"{domain}.{zone}", "A", lifetime=TI_TIMEOUT)
         return str(answers[0]), None
     except dns.resolver.NXDOMAIN:
         return None, None
@@ -288,7 +290,7 @@ async def enrich_url_spamhaus(db: AsyncSession, domain: str) -> dict:
         return {"source": "spamhaus", "verdict": c.verdict,
                 "reason": rr.get("reason"), "code": rr.get("code"), "cached": True}
 
-    code, error = await asyncio.to_thread(_query_dbl_sync, domain)
+    code, error = await asyncio.to_thread(_query_dnsbl_sync, domain, "dbl.spamhaus.org")
 
     if error:
         return {"source": "spamhaus", "verdict": VERDICT_UNKNOWN,
@@ -305,6 +307,33 @@ async def enrich_url_spamhaus(db: AsyncSession, domain: str) -> dict:
 
     return {"source": "spamhaus", "verdict": verdict, "reason": reason,
             "code": code, "cached": False}
+
+
+# ── SURBL (free DNS-based lookup) ─────────────────────────────────────────────
+# multi.surbl.org returns a bitmask-encoded 127.0.0.x response combining
+# several sub-lists (phishing, malware, abuse, etc). Public secondary sources
+# disagree on the exact current bit->category mapping, so rather than risk
+# mis-categorizing, this only reports listed vs not-listed — still a useful
+# independent signal, just without a category breakdown.
+async def enrich_url_surbl(db: AsyncSession, domain: str) -> dict:
+    cached = await get_cached_enrichment(db, "domain", domain)
+    surbl_cache = [c for c in cached if c.source == "surbl"]
+    if surbl_cache:
+        c = surbl_cache[0]
+        rr = c.raw_response or {}
+        return {"source": "surbl", "verdict": c.verdict, "code": rr.get("code"), "cached": True}
+
+    code, error = await asyncio.to_thread(_query_dnsbl_sync, domain, "multi.surbl.org")
+
+    if error:
+        return {"source": "surbl", "verdict": VERDICT_UNKNOWN,
+                "message": f"SURBL DNS lookup failed: {error}"}
+
+    verdict = VERDICT_MALICIOUS if code else VERDICT_CLEAN
+
+    await save_enrichment(db, "domain", domain, "surbl", verdict, raw_response={"code": code})
+
+    return {"source": "surbl", "verdict": verdict, "code": code, "cached": False}
 
 
 # ── URLhaus (abuse.ch) ────────────────────────────────────────────────────────
@@ -489,6 +518,69 @@ async def enrich_url_safe_browsing(db: AsyncSession, url: str) -> dict:
         return {"source": "safe_browsing", "verdict": VERDICT_UNKNOWN, "message": str(exc)}
 
 
+# ── PhishTank ─────────────────────────────────────────────────────────────────
+# NOTE: PhishTank's current auth policy and exact response field names could
+# not be freshly verified against their live docs at the time this was
+# written (network-restricted research environment). app_key is sent when
+# configured but treated as optional, matching PhishTank's historical
+# behavior (unauthenticated lookups allowed at a stricter rate limit). All
+# response fields are read defensively with .get() — if PhishTank's schema
+# has since changed, this degrades to "not found" rather than crashing.
+async def enrich_url_phishtank(db: AsyncSession, url: str) -> dict:
+    cache_key = _cache_key_for_url(url)
+    cached = await get_cached_enrichment(db, "url", cache_key)
+    pt_cache = [c for c in cached if c.source == "phishtank"]
+    if pt_cache:
+        c = pt_cache[0]
+        rr = c.raw_response or {}
+        return {"source": "phishtank", "verdict": c.verdict,
+                "phish_id": rr.get("phish_id"), "detail_url": rr.get("detail_url"),
+                "cached": True}
+
+    form = {"url": base64.b64encode(url.encode()).decode(), "format": "json"}
+    if PHISHTANK_APP_KEY:
+        form["app_key"] = PHISHTANK_APP_KEY
+
+    try:
+        async with httpx.AsyncClient(timeout=TI_TIMEOUT) as client:
+            resp = await client.post("https://checkurl.phishtank.com/checkurl/", data=form)
+
+        if resp.status_code == 509:
+            return {"source": "phishtank", "verdict": VERDICT_UNKNOWN,
+                    "message": "PhishTank rate limit exceeded — add PHISHTANK_APP_KEY "
+                               "for a higher limit"}
+        if resp.status_code != 200:
+            return {"source": "phishtank", "verdict": VERDICT_UNKNOWN,
+                    "message": f"PhishTank error: HTTP {resp.status_code}"}
+
+        results = resp.json().get("results") or {}
+        if not results.get("in_database"):
+            await save_enrichment(db, "url", cache_key, "phishtank", VERDICT_UNKNOWN,
+                                   raw_response={"not_found": True})
+            return {"source": "phishtank", "verdict": VERDICT_UNKNOWN,
+                    "message": "Not found in PhishTank database"}
+
+        verified   = bool(results.get("verified"))
+        valid      = bool(results.get("valid"))
+        phish_id   = results.get("phish_id")
+        detail_url = results.get("phish_detail_page")
+        verdict    = VERDICT_MALICIOUS if (verified and valid) else VERDICT_SUSPICIOUS
+
+        await save_enrichment(db, "url", cache_key, "phishtank", verdict,
+                               raw_response={"phish_id": phish_id, "detail_url": detail_url,
+                                             "verified": verified, "valid": valid})
+
+        return {"source": "phishtank", "verdict": verdict, "phish_id": phish_id,
+                "detail_url": detail_url, "verified": verified, "cached": False}
+
+    except httpx.TimeoutException:
+        return {"source": "phishtank", "verdict": VERDICT_UNKNOWN,
+                "message": "PhishTank request timed out"}
+    except Exception as exc:
+        log.error("PhishTank enrichment failed: %s", exc)
+        return {"source": "phishtank", "verdict": VERDICT_UNKNOWN, "message": str(exc)}
+
+
 # ── Combined enrichment + report ─────────────────────────────────────────────
 def _overall_verdict(verdicts: list[str]) -> str:
     if VERDICT_MALICIOUS in verdicts:  return VERDICT_MALICIOUS
@@ -505,9 +597,11 @@ async def enrich_url(db: AsyncSession, raw_url: str,
     sources["virustotal"] = await enrich_url_virustotal(db, url)
     sources["urlscan"]    = await enrich_url_urlscan(db, url, domain)
     sources["spamhaus"]   = await enrich_url_spamhaus(db, domain)
+    sources["surbl"]      = await enrich_url_surbl(db, domain)
     sources["urlhaus"]    = await enrich_url_urlhaus(db, url)
     sources["rdap"]       = await enrich_url_domain_age(db, domain)
     sources["safe_browsing"] = await enrich_url_safe_browsing(db, url)
+    sources["phishtank"]  = await enrich_url_phishtank(db, url)
 
     overall = _overall_verdict([s.get("verdict", VERDICT_UNKNOWN) for s in sources.values()])
     investigated_at = datetime.now(UTC)
@@ -639,6 +733,16 @@ def generate_investigation_report(url: str, domain: str, sources: dict,
                  "not reliably attributed by Spamhaus's fair-use policy).")
     lines.append("")
 
+    su = sources.get("surbl", {})
+    lines.append("[SURBL]")
+    if su.get("verdict") == VERDICT_UNKNOWN and su.get("message"):
+        lines.append(f"  {su['message']}")
+    elif su.get("code"):
+        lines.append(f"  Domain status    : LISTED ({su['code']})")
+    else:
+        lines.append("  Domain status    : NOT LISTED")
+    lines.append("")
+
     uh = sources["urlhaus"]
     lines.append("[URLhaus]")
     if uh["verdict"] == VERDICT_NO_KEY:
@@ -682,6 +786,17 @@ def generate_investigation_report(url: str, domain: str, sources: dict,
         lines.append(f"  {gsb.get('message', 'No result')}")
     lines.append("")
 
+    pt = sources.get("phishtank", {})
+    lines.append("[PhishTank]")
+    if pt.get("phish_id"):
+        lines.append(f"  Status           : Listed — phish_id {pt['phish_id']}"
+                      + (" (verified)" if pt.get("verified") else " (unverified report)"))
+        if pt.get("detail_url"):
+            lines.append(f"  Detail page      : {pt['detail_url']}")
+    else:
+        lines.append(f"  {pt.get('message', 'Not found in PhishTank database')}")
+    lines.append("")
+
     lines.append("RECOMMENDATION")
     lines.append(dash)
     if overall_verdict == VERDICT_MALICIOUS:
@@ -721,9 +836,9 @@ def generate_investigation_report(url: str, domain: str, sources: dict,
 
 
 def get_key_status() -> dict:
-    """Whether urlscan.io/URLhaus/Safe Browsing keys are configured — read
-    live from this module's own globals (refreshed first) rather than a
-    stale copy someone else might have imported at process-startup time."""
+    """Whether optional API keys are configured — read live from this
+    module's own globals (refreshed first) rather than a stale copy someone
+    else might have imported at process-startup time."""
     refresh_from_env_file()
     return {"urlscan_key": bool(URLSCAN_API_KEY), "urlhaus_key": bool(URLHAUS_AUTH_KEY),
-            "safe_browsing_key": bool(GSB_API_KEY)}
+            "safe_browsing_key": bool(GSB_API_KEY), "phishtank_key": bool(PHISHTANK_APP_KEY)}
