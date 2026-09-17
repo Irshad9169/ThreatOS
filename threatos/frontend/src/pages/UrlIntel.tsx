@@ -121,6 +121,20 @@ function SourceCard({ title, data }: { title: string; data: SourceResult }) {
         </div>
       )}
 
+      {data.source === 'rdap' && data.age_days != null && (
+        <div style={{ fontSize: 11 }}>
+          <span style={{ color: 'var(--muted)' }}>Domain age: </span>
+          <span style={{ fontWeight: 600, color: data.age_days < 30 ? '#fab387' : '#a6e3a1' }}>
+            {data.age_days} days
+          </span>
+          {data.registered_at && (
+            <span style={{ color: 'var(--muted)' }}>
+              {' '}(registered {new Date(data.registered_at).toLocaleDateString()})
+            </span>
+          )}
+        </div>
+      )}
+
       {data.cached && (
         <div style={{ fontSize: 10, color: 'var(--muted)', fontStyle: 'italic', marginTop: 4 }}>
           cached
@@ -200,7 +214,7 @@ export function UrlIntel() {
         <div>
           <h1 style={{ fontSize: 20, fontWeight: 700 }}>URL Scanner</h1>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
-            Investigate a suspicious URL against VirusTotal, urlscan.io, Spamhaus, and URLhaus
+            Investigate a suspicious URL against VirusTotal, urlscan.io, Spamhaus, URLhaus, and domain age (RDAP)
           </div>
         </div>
       </div>

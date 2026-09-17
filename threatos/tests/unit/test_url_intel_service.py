@@ -20,9 +20,9 @@ from threatos.services.ti_service import (
     VERDICT_UNKNOWN,
 )
 from threatos.services.url_intel_service import (
-    enrich_url, enrich_url_spamhaus, enrich_url_urlhaus, enrich_url_urlscan,
-    enrich_url_virustotal, generate_investigation_report, get_investigation,
-    list_investigations, parse_url,
+    enrich_url, enrich_url_domain_age, enrich_url_spamhaus, enrich_url_urlhaus,
+    enrich_url_urlscan, enrich_url_virustotal, generate_investigation_report,
+    get_investigation, list_investigations, parse_url,
 )
 
 
@@ -253,6 +253,82 @@ async def test_urlhaus_not_found(db_session, monkeypatch):
     assert result["verdict"] == VERDICT_UNKNOWN
 
 
+# ── RDAP domain age ────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_rdap_old_domain_is_clean(db_session):
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/domain/old-domain.example"
+        return httpx.Response(200, json={"events": [
+            {"eventAction": "registration", "eventDate": "2010-01-01T00:00:00Z"},
+            {"eventAction": "expiration", "eventDate": "2030-01-01T00:00:00Z"},
+        ]})
+
+    with patch("threatos.services.url_intel_service.httpx.AsyncClient",
+               _mock_client_factory(handler)):
+        result = await enrich_url_domain_age(db_session, "old-domain.example")
+
+    assert result["verdict"] == VERDICT_CLEAN
+    assert result["age_days"] > 3000
+
+@pytest.mark.asyncio
+async def test_rdap_young_domain_is_suspicious(db_session):
+    from datetime import timedelta
+    recent = (datetime.now(UTC) - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"events": [
+            {"eventAction": "registration", "eventDate": recent},
+        ]})
+
+    with patch("threatos.services.url_intel_service.httpx.AsyncClient",
+               _mock_client_factory(handler)):
+        result = await enrich_url_domain_age(db_session, "brand-new-domain.example")
+
+    assert result["verdict"] == VERDICT_SUSPICIOUS
+    assert result["age_days"] < 30
+
+@pytest.mark.asyncio
+async def test_rdap_not_found_returns_unknown(db_session):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    with patch("threatos.services.url_intel_service.httpx.AsyncClient",
+               _mock_client_factory(handler)):
+        result = await enrich_url_domain_age(db_session, "unregistered.example")
+
+    assert result["verdict"] == VERDICT_UNKNOWN
+
+@pytest.mark.asyncio
+async def test_rdap_rate_limited_returns_unknown(db_session):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429)
+
+    with patch("threatos.services.url_intel_service.httpx.AsyncClient",
+               _mock_client_factory(handler)):
+        result = await enrich_url_domain_age(db_session, "throttled.example")
+
+    assert result["verdict"] == VERDICT_UNKNOWN
+    assert "rate-limited" in result["message"]
+
+@pytest.mark.asyncio
+async def test_rdap_uses_cache_on_second_call(db_session):
+    calls = {"n": 0}
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, json={"events": [
+            {"eventAction": "registration", "eventDate": "2010-01-01T00:00:00Z"},
+        ]})
+
+    with patch("threatos.services.url_intel_service.httpx.AsyncClient",
+               _mock_client_factory(handler)):
+        await enrich_url_domain_age(db_session, "cached-domain.example")
+        result2 = await enrich_url_domain_age(db_session, "cached-domain.example")
+
+    assert calls["n"] == 1
+    assert result2["cached"] is True
+
+
 # ── Combined enrichment ───────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -266,11 +342,14 @@ async def test_enrich_url_worst_verdict_wins(db_session):
     async def fake_urlscan(db, url, domain): return {"source": "urlscan", "verdict": VERDICT_MALICIOUS}
     async def fake_spamhaus(db, domain): return {"source": "spamhaus", "verdict": VERDICT_CLEAN, "reason": "not listed"}
     async def fake_urlhaus(db, url): return {"source": "urlhaus", "verdict": VERDICT_NO_KEY, "message": "no key"}
+    async def fake_rdap(db, domain): return {"source": "rdap", "verdict": VERDICT_CLEAN,
+                                              "age_days": 3650, "registered_at": "2015-01-01T00:00:00Z"}
 
     with patch("threatos.services.url_intel_service.enrich_url_virustotal", fake_vt), \
          patch("threatos.services.url_intel_service.enrich_url_urlscan", fake_urlscan), \
          patch("threatos.services.url_intel_service.enrich_url_spamhaus", fake_spamhaus), \
-         patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake_urlhaus):
+         patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake_urlhaus), \
+         patch("threatos.services.url_intel_service.enrich_url_domain_age", fake_rdap):
         result = await enrich_url(db_session, "https://mixed.example", investigated_by="analyst1")
 
     assert result["overall_verdict"] == VERDICT_MALICIOUS
@@ -328,7 +407,8 @@ async def test_enrich_url_persists_investigation_row(db_session):
     with patch("threatos.services.url_intel_service.enrich_url_virustotal", fake), \
          patch("threatos.services.url_intel_service.enrich_url_urlscan", fake), \
          patch("threatos.services.url_intel_service.enrich_url_spamhaus", fake), \
-         patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake):
+         patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_domain_age", fake):
         result = await enrich_url(db_session, "https://persisted.example", investigated_by="analyst1")
 
     assert result["id"]
@@ -345,7 +425,8 @@ async def test_list_investigations_most_recent_first(db_session):
     with patch("threatos.services.url_intel_service.enrich_url_virustotal", fake), \
          patch("threatos.services.url_intel_service.enrich_url_urlscan", fake), \
          patch("threatos.services.url_intel_service.enrich_url_spamhaus", fake), \
-         patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake):
+         patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_domain_age", fake):
         await enrich_url(db_session, "https://first.example")
         await enrich_url(db_session, "https://second.example")
 

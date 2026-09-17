@@ -363,6 +363,67 @@ async def enrich_url_urlhaus(db: AsyncSession, url: str) -> dict:
         return {"source": "urlhaus", "verdict": VERDICT_UNKNOWN, "message": str(exc)}
 
 
+# ── RDAP domain age ────────────────────────────────────────────────────────────
+# rdap.org is a free public bootstrap redirector (no API key) that resolves the
+# right authoritative registry RDAP server for any TLD and redirects to it —
+# needs follow_redirects=True. Rate-limited to ~10 req/10s; a freshly-
+# registered domain is one of the strongest phishing signals, so a young
+# domain contributes a "suspicious" verdict, not just an informational note.
+_YOUNG_DOMAIN_THRESHOLD_DAYS = 30
+
+async def enrich_url_domain_age(db: AsyncSession, domain: str) -> dict:
+    cached = await get_cached_enrichment(db, "domain", domain)
+    rdap_cache = [c for c in cached if c.source == "rdap"]
+    if rdap_cache:
+        c = rdap_cache[0]
+        rr = c.raw_response or {}
+        return {"source": "rdap", "verdict": c.verdict,
+                "registered_at": rr.get("registered_at"),
+                "age_days": rr.get("age_days"), "cached": True}
+
+    try:
+        async with httpx.AsyncClient(timeout=TI_TIMEOUT, follow_redirects=True) as client:
+            resp = await client.get(f"https://rdap.org/domain/{domain}")
+
+        if resp.status_code == 404:
+            await save_enrichment(db, "domain", domain, "rdap", VERDICT_UNKNOWN,
+                                   raw_response={"not_found": True})
+            return {"source": "rdap", "verdict": VERDICT_UNKNOWN,
+                    "message": "Domain not found in RDAP (unregistered or unsupported TLD)"}
+        if resp.status_code == 429:
+            return {"source": "rdap", "verdict": VERDICT_UNKNOWN,
+                    "message": "RDAP lookup rate-limited — try again shortly"}
+        if resp.status_code != 200:
+            return {"source": "rdap", "verdict": VERDICT_UNKNOWN,
+                    "message": f"RDAP error: HTTP {resp.status_code}"}
+
+        data = resp.json()
+        events = data.get("events", []) or []
+        registered_at = next(
+            (e.get("eventDate") for e in events if e.get("eventAction") == "registration"), None)
+
+        if not registered_at:
+            return {"source": "rdap", "verdict": VERDICT_UNKNOWN,
+                    "message": "RDAP response had no registration date"}
+
+        registered_dt = datetime.fromisoformat(registered_at.replace("Z", "+00:00"))
+        age_days = (datetime.now(UTC) - registered_dt).days
+        verdict = VERDICT_SUSPICIOUS if age_days < _YOUNG_DOMAIN_THRESHOLD_DAYS else VERDICT_CLEAN
+
+        await save_enrichment(db, "domain", domain, "rdap", verdict,
+                               raw_response={"registered_at": registered_at, "age_days": age_days})
+
+        return {"source": "rdap", "verdict": verdict,
+                "registered_at": registered_at, "age_days": age_days, "cached": False}
+
+    except httpx.TimeoutException:
+        return {"source": "rdap", "verdict": VERDICT_UNKNOWN,
+                "message": "RDAP request timed out"}
+    except Exception as exc:
+        log.error("RDAP domain-age lookup failed: %s", exc)
+        return {"source": "rdap", "verdict": VERDICT_UNKNOWN, "message": str(exc)}
+
+
 # ── Combined enrichment + report ─────────────────────────────────────────────
 def _overall_verdict(verdicts: list[str]) -> str:
     if VERDICT_MALICIOUS in verdicts:  return VERDICT_MALICIOUS
@@ -380,6 +441,7 @@ async def enrich_url(db: AsyncSession, raw_url: str,
     sources["urlscan"]    = await enrich_url_urlscan(db, url, domain)
     sources["spamhaus"]   = await enrich_url_spamhaus(db, domain)
     sources["urlhaus"]    = await enrich_url_urlhaus(db, url)
+    sources["rdap"]       = await enrich_url_domain_age(db, domain)
 
     overall = _overall_verdict([s.get("verdict", VERDICT_UNKNOWN) for s in sources.values()])
     investigated_at = datetime.now(UTC)
@@ -527,6 +589,19 @@ def generate_investigation_report(url: str, domain: str, sources: dict,
                               f"({p.get('signature') or p.get('response_md5', '?')})")
     else:
         lines.append(f"  {uh.get('message', 'Not found in URLhaus database')}")
+    lines.append("")
+
+    rd = sources.get("rdap", {})
+    lines.append("[Domain Age (RDAP)]")
+    if rd.get("age_days") is not None:
+        lines.append(f"  Registered on    : {rd.get('registered_at', '?')}")
+        lines.append(f"  Domain age       : {rd['age_days']} days")
+        if rd["verdict"] == VERDICT_SUSPICIOUS:
+            lines.append(f"  NOTE: registered under {_YOUNG_DOMAIN_THRESHOLD_DAYS} days ago — "
+                          f"newly-registered domains are commonly used for phishing/scam "
+                          f"campaigns before being taken down.")
+    else:
+        lines.append(f"  {rd.get('message', 'Not checked')}")
     lines.append("")
 
     lines.append("RECOMMENDATION")

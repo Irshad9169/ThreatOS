@@ -54,11 +54,14 @@ async def test_investigate_returns_report_and_verdict(test_client: AsyncClient):
         return _fake_source("spamhaus", VERDICT_CLEAN, reason="not listed")
     async def fake_urlhaus(db, url):
         return _fake_source("urlhaus", VERDICT_NO_KEY, message="no key configured")
+    async def fake_rdap(db, domain):
+        return _fake_source("rdap", VERDICT_CLEAN, age_days=3650, registered_at="2015-01-01T00:00:00Z")
 
     with patch("threatos.services.url_intel_service.enrich_url_virustotal", fake_vt), \
          patch("threatos.services.url_intel_service.enrich_url_urlscan", fake_urlscan), \
          patch("threatos.services.url_intel_service.enrich_url_spamhaus", fake_spamhaus), \
-         patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake_urlhaus):
+         patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake_urlhaus), \
+         patch("threatos.services.url_intel_service.enrich_url_domain_age", fake_rdap):
         resp = await test_client.post(
             "/api/url-intel/investigate", json={"url": "https://phish.example/login"})
 
@@ -67,7 +70,7 @@ async def test_investigate_returns_report_and_verdict(test_client: AsyncClient):
     assert data["overall_verdict"] == VERDICT_MALICIOUS
     assert data["domain"] == "phish.example"
     assert "VERDICT: MALICIOUS" in data["report_text"]
-    assert set(data["sources"]) == {"virustotal", "urlscan", "spamhaus", "urlhaus"}
+    assert set(data["sources"]) == {"virustotal", "urlscan", "spamhaus", "urlhaus", "rdap"}
 
 
 @pytest.mark.asyncio
@@ -90,11 +93,14 @@ async def test_history_lists_past_investigation_without_rescanning(test_client: 
         return _fake_source("spamhaus", VERDICT_CLEAN, reason="not listed")
     async def fake_urlhaus(db, url):
         return _fake_source("urlhaus", VERDICT_NO_KEY, message="no key configured")
+    async def fake_rdap(db, domain):
+        return _fake_source("rdap", VERDICT_CLEAN, age_days=3650, registered_at="2015-01-01T00:00:00Z")
 
     with patch("threatos.services.url_intel_service.enrich_url_virustotal", fake_vt), \
          patch("threatos.services.url_intel_service.enrich_url_urlscan", fake_urlscan), \
          patch("threatos.services.url_intel_service.enrich_url_spamhaus", fake_spamhaus), \
-         patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake_urlhaus):
+         patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake_urlhaus), \
+         patch("threatos.services.url_intel_service.enrich_url_domain_age", fake_rdap):
         investigate_resp = await test_client.post(
             "/api/url-intel/investigate", json={"url": "https://history-test.example/x"})
     investigation_id = investigate_resp.json()["id"]
