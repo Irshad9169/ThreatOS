@@ -121,6 +121,20 @@ function SourceCard({ title, data }: { title: string; data: SourceResult }) {
         </div>
       )}
 
+      {data.source === 'uribl' && (
+        <div style={{ fontSize: 11 }}>
+          <span style={{ color: 'var(--muted)' }}>Status: </span>
+          {data.code ? `listed (${data.code})` : 'not listed'}
+        </div>
+      )}
+
+      {data.source === 'sem' && (
+        <div style={{ fontSize: 11 }}>
+          <span style={{ color: 'var(--muted)' }}>Status: </span>
+          {data.code ? `listed (${data.code})` : 'not listed'}
+        </div>
+      )}
+
       {data.source === 'urlhaus' && data.threat && (
         <div style={{ fontSize: 11 }}>
           <span style={{ color: 'var(--muted)' }}>Threat: </span>{data.threat}
@@ -161,6 +175,26 @@ function SourceCard({ title, data }: { title: string; data: SourceResult }) {
               <a href={data.detail_url} target="_blank" rel="noopener noreferrer"
                 style={{ color: 'var(--accent)' }}>detail ↗</a>
             </>
+          )}
+        </div>
+      )}
+
+      {data.source === 'email_auth' && (
+        <div style={{ fontSize: 11, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <span>
+            <span style={{ color: 'var(--muted)' }}>SPF: </span>
+            <span style={{ color: data.spf ? '#a6e3a1' : '#fab387' }}>
+              {data.spf ? 'yes' : 'no'}
+            </span>
+          </span>
+          <span>
+            <span style={{ color: 'var(--muted)' }}>DMARC: </span>
+            <span style={{ color: data.dmarc_policy && data.dmarc_policy !== 'none' ? '#a6e3a1' : '#fab387' }}>
+              {data.dmarc_policy || 'none'}
+            </span>
+          </span>
+          {data.dkim_selector_found && (
+            <span><span style={{ color: 'var(--muted)' }}>DKIM: </span>found</span>
           )}
         </div>
       )}
@@ -244,8 +278,9 @@ export function UrlIntel() {
         <div>
           <h1 style={{ fontSize: 20, fontWeight: 700 }}>URL Scanner</h1>
           <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
-            Investigate a suspicious URL against VirusTotal, urlscan.io, Spamhaus, SURBL,
-            URLhaus, domain age (RDAP), Google Safe Browsing, and PhishTank
+            Investigate a suspicious URL against 11 sources: VirusTotal, urlscan.io,
+            Spamhaus, SURBL, URIBL, SEM-URI, URLhaus, RDAP domain age, Google Safe Browsing,
+            PhishTank, and SPF/DMARC/DKIM
           </div>
         </div>
       </div>
@@ -268,18 +303,10 @@ export function UrlIntel() {
           }}>
             <span style={{ fontSize: 16 }}>✅</span>
             <div>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>Spamhaus DBL</div>
-              <div style={{ fontSize: 11, color: 'var(--muted)' }}>No key required (DNS-based)</div>
-            </div>
-          </div>
-          <div style={{
-            background: 'var(--bg2)', border: '1px solid #a6e3a144',
-            borderRadius: 8, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10,
-          }}>
-            <span style={{ fontSize: 16 }}>✅</span>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>SURBL</div>
-              <div style={{ fontSize: 11, color: 'var(--muted)' }}>No key required (DNS-based)</div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>DNSBL + Email Auth</div>
+              <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                Spamhaus, SURBL, URIBL, SEM-URI, SPF/DMARC/DKIM — no key required
+              </div>
             </div>
           </div>
           <div style={{

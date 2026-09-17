@@ -20,8 +20,9 @@ from threatos.services.ti_service import (
     VERDICT_UNKNOWN,
 )
 from threatos.services.url_intel_service import (
-    enrich_url, enrich_url_domain_age, enrich_url_phishtank,
-    enrich_url_safe_browsing, enrich_url_spamhaus, enrich_url_surbl,
+    enrich_url, enrich_url_domain_age, enrich_url_email_auth,
+    enrich_url_phishtank, enrich_url_safe_browsing, enrich_url_sem,
+    enrich_url_spamhaus, enrich_url_surbl, enrich_url_uribl,
     enrich_url_urlhaus, enrich_url_urlscan, enrich_url_virustotal,
     generate_investigation_report, get_investigation, list_investigations,
     parse_url,
@@ -431,6 +432,104 @@ async def test_surbl_uses_cache_on_second_call(db_session):
     assert result2["cached"] is True
 
 
+# ── URIBL ─────────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_uribl_not_listed(db_session):
+    with patch("dns.resolver.resolve", side_effect=dns.resolver.NXDOMAIN()):
+        result = await enrich_url_uribl(db_session, "clean-domain.example")
+    assert result["verdict"] == VERDICT_CLEAN
+
+@pytest.mark.asyncio
+async def test_uribl_listed_is_malicious(db_session):
+    with patch("dns.resolver.resolve", return_value=["127.0.0.4"]):
+        result = await enrich_url_uribl(db_session, "bad-domain.example")
+    assert result["verdict"] == VERDICT_MALICIOUS
+
+@pytest.mark.asyncio
+async def test_uribl_rate_limit_code_is_not_treated_as_malicious(db_session):
+    with patch("dns.resolver.resolve", return_value=["127.0.0.255"]):
+        result = await enrich_url_uribl(db_session, "throttled-domain.example")
+    assert result["verdict"] == VERDICT_UNKNOWN
+
+
+# ── SEM-URI ───────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_sem_not_listed(db_session):
+    with patch("dns.resolver.resolve", side_effect=dns.resolver.NXDOMAIN()):
+        result = await enrich_url_sem(db_session, "clean-domain.example")
+    assert result["verdict"] == VERDICT_CLEAN
+
+@pytest.mark.asyncio
+async def test_sem_listed_is_malicious(db_session):
+    with patch("dns.resolver.resolve", return_value=["127.0.0.2"]):
+        result = await enrich_url_sem(db_session, "bad-domain.example")
+    assert result["verdict"] == VERDICT_MALICIOUS
+
+
+# ── Email authentication ──────────────────────────────────────────────────────
+
+class _FakeTxtRdata:
+    """Mimics the shape of a real dnspython TXT rdata object closely enough
+    for _query_txt_sync's getattr(a, "strings", [a.to_text()]) — that default
+    expression is evaluated eagerly by Python regardless of whether "strings"
+    is present, so to_text() must exist too, just like on the real object."""
+    def __init__(self, value: str):
+        self.strings = [value.encode()]
+    def to_text(self):
+        return self.strings[0].decode()
+
+def _txt_handler(records_by_name: dict):
+    def _resolve(name, rtype, lifetime=None):
+        name_str = str(name).rstrip(".")
+        if name_str not in records_by_name:
+            raise dns.resolver.NXDOMAIN()
+        return [_FakeTxtRdata(r) for r in records_by_name[name_str]]
+    return _resolve
+
+@pytest.mark.asyncio
+async def test_email_auth_configured_is_clean(db_session):
+    handler = _txt_handler({
+        "good-domain.example": ["v=spf1 include:_spf.google.com ~all"],
+        "_dmarc.good-domain.example": ["v=DMARC1; p=reject"],
+    })
+    with patch("dns.resolver.resolve", side_effect=handler):
+        result = await enrich_url_email_auth(db_session, "good-domain.example")
+    assert result["verdict"] == VERDICT_CLEAN
+    assert result["spf"] is True
+    assert result["dmarc_policy"] == "reject"
+
+@pytest.mark.asyncio
+async def test_email_auth_missing_both_is_suspicious(db_session):
+    with patch("dns.resolver.resolve", side_effect=dns.resolver.NXDOMAIN()):
+        result = await enrich_url_email_auth(db_session, "no-auth-domain.example")
+    assert result["verdict"] == VERDICT_SUSPICIOUS
+    assert result["spf"] is False
+    assert result["dmarc_policy"] is None
+
+@pytest.mark.asyncio
+async def test_email_auth_dmarc_policy_none_is_suspicious(db_session):
+    handler = _txt_handler({
+        "weak-domain.example": ["v=spf1 ~all"],
+        "_dmarc.weak-domain.example": ["v=DMARC1; p=none"],
+    })
+    with patch("dns.resolver.resolve", side_effect=handler):
+        result = await enrich_url_email_auth(db_session, "weak-domain.example")
+    assert result["verdict"] == VERDICT_SUSPICIOUS
+    assert result["dmarc_policy"] == "none"
+
+@pytest.mark.asyncio
+async def test_email_auth_uses_cache_on_second_call(db_session):
+    with patch("dns.resolver.resolve", side_effect=dns.resolver.NXDOMAIN()) as mocked:
+        await enrich_url_email_auth(db_session, "cached-domain.example")
+        calls_after_first = mocked.call_count
+        result2 = await enrich_url_email_auth(db_session, "cached-domain.example")
+
+    assert result2["cached"] is True
+    assert mocked.call_count == calls_after_first  # no new DNS lookups on the cached call
+
+
 # ── PhishTank ─────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -534,6 +633,10 @@ async def test_enrich_url_worst_verdict_wins(db_session):
     async def fake_surbl(db, domain): return {"source": "surbl", "verdict": VERDICT_CLEAN}
     async def fake_pt(db, url): return {"source": "phishtank", "verdict": VERDICT_UNKNOWN,
                                          "message": "not found"}
+    async def fake_uribl(db, domain): return {"source": "uribl", "verdict": VERDICT_CLEAN}
+    async def fake_sem(db, domain): return {"source": "sem", "verdict": VERDICT_CLEAN}
+    async def fake_email_auth(db, domain): return {"source": "email_auth", "verdict": VERDICT_CLEAN,
+                                                    "spf": True, "dmarc_policy": "reject"}
 
     with patch("threatos.services.url_intel_service.enrich_url_virustotal", fake_vt), \
          patch("threatos.services.url_intel_service.enrich_url_urlscan", fake_urlscan), \
@@ -542,7 +645,10 @@ async def test_enrich_url_worst_verdict_wins(db_session):
          patch("threatos.services.url_intel_service.enrich_url_domain_age", fake_rdap), \
          patch("threatos.services.url_intel_service.enrich_url_safe_browsing", fake_gsb), \
          patch("threatos.services.url_intel_service.enrich_url_surbl", fake_surbl), \
-         patch("threatos.services.url_intel_service.enrich_url_phishtank", fake_pt):
+         patch("threatos.services.url_intel_service.enrich_url_phishtank", fake_pt), \
+         patch("threatos.services.url_intel_service.enrich_url_uribl", fake_uribl), \
+         patch("threatos.services.url_intel_service.enrich_url_sem", fake_sem), \
+         patch("threatos.services.url_intel_service.enrich_url_email_auth", fake_email_auth):
         result = await enrich_url(db_session, "https://mixed.example", investigated_by="analyst1")
 
     assert result["overall_verdict"] == VERDICT_MALICIOUS
@@ -604,7 +710,10 @@ async def test_enrich_url_persists_investigation_row(db_session):
          patch("threatos.services.url_intel_service.enrich_url_domain_age", fake), \
          patch("threatos.services.url_intel_service.enrich_url_safe_browsing", fake), \
          patch("threatos.services.url_intel_service.enrich_url_surbl", fake), \
-         patch("threatos.services.url_intel_service.enrich_url_phishtank", fake):
+         patch("threatos.services.url_intel_service.enrich_url_phishtank", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_uribl", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_sem", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_email_auth", fake):
         result = await enrich_url(db_session, "https://persisted.example", investigated_by="analyst1")
 
     assert result["id"]
@@ -625,7 +734,10 @@ async def test_list_investigations_most_recent_first(db_session):
          patch("threatos.services.url_intel_service.enrich_url_domain_age", fake), \
          patch("threatos.services.url_intel_service.enrich_url_safe_browsing", fake), \
          patch("threatos.services.url_intel_service.enrich_url_surbl", fake), \
-         patch("threatos.services.url_intel_service.enrich_url_phishtank", fake):
+         patch("threatos.services.url_intel_service.enrich_url_phishtank", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_uribl", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_sem", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_email_auth", fake):
         await enrich_url(db_session, "https://first.example")
         await enrich_url(db_session, "https://second.example")
 

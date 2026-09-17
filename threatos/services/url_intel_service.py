@@ -4,6 +4,7 @@ import base64
 import hashlib
 import logging
 import os
+import re
 import uuid
 from datetime import UTC, datetime
 from urllib.parse import urlparse
@@ -336,6 +337,127 @@ async def enrich_url_surbl(db: AsyncSession, domain: str) -> dict:
     return {"source": "surbl", "verdict": verdict, "code": code, "cached": False}
 
 
+# ── URIBL (free DNS-based lookup, rate-limit-aware) ───────────────────────────
+# URIBL's public mirrors return a sentinel 127.0.0.255 (sometimes 127.0.0.1)
+# when a querying IP is rate-limited — that means "try again later", not
+# "listed". Treating it as malicious would produce false positives at volume.
+_URIBL_RATE_LIMIT_CODES = {"127.0.0.255", "127.0.0.1"}
+
+async def enrich_url_uribl(db: AsyncSession, domain: str) -> dict:
+    cached = await get_cached_enrichment(db, "domain", domain)
+    ur_cache = [c for c in cached if c.source == "uribl"]
+    if ur_cache:
+        c = ur_cache[0]
+        rr = c.raw_response or {}
+        return {"source": "uribl", "verdict": c.verdict, "code": rr.get("code"), "cached": True}
+
+    code, error = await asyncio.to_thread(_query_dnsbl_sync, domain, "multi.uribl.com")
+
+    if error:
+        return {"source": "uribl", "verdict": VERDICT_UNKNOWN,
+                "message": f"URIBL DNS lookup failed: {error}"}
+
+    if code in _URIBL_RATE_LIMIT_CODES:
+        return {"source": "uribl", "verdict": VERDICT_UNKNOWN,
+                "message": "URIBL public mirror rate-limited this query — try again later"}
+
+    verdict = VERDICT_MALICIOUS if code else VERDICT_CLEAN
+
+    await save_enrichment(db, "domain", domain, "uribl", verdict, raw_response={"code": code})
+
+    return {"source": "uribl", "verdict": verdict, "code": code, "cached": False}
+
+
+# ── SEM-URI (Spam Eating Monkey, free DNS-based lookup) ───────────────────────
+async def enrich_url_sem(db: AsyncSession, domain: str) -> dict:
+    cached = await get_cached_enrichment(db, "domain", domain)
+    sem_cache = [c for c in cached if c.source == "sem"]
+    if sem_cache:
+        c = sem_cache[0]
+        rr = c.raw_response or {}
+        return {"source": "sem", "verdict": c.verdict, "code": rr.get("code"), "cached": True}
+
+    code, error = await asyncio.to_thread(_query_dnsbl_sync, domain, "uribl.spameatingmonkey.net")
+
+    if error:
+        return {"source": "sem", "verdict": VERDICT_UNKNOWN,
+                "message": f"SEM-URI DNS lookup failed: {error}"}
+
+    verdict = VERDICT_MALICIOUS if code else VERDICT_CLEAN
+
+    await save_enrichment(db, "domain", domain, "sem", verdict, raw_response={"code": code})
+
+    return {"source": "sem", "verdict": verdict, "code": code, "cached": False}
+
+
+# ── Email authentication (SPF / DMARC / best-effort DKIM) ────────────────────
+# DKIM has no fixed, discoverable record location (the selector is arbitrary
+# and only appears in a real email's headers), so this only probes a handful
+# of very common selectors — a miss does NOT mean DKIM isn't configured, and
+# is deliberately excluded from the verdict; it's shown as bonus info only.
+_COMMON_DKIM_SELECTORS = ["google", "selector1", "selector2", "default", "k1", "dkim"]
+
+def _query_txt_sync(name: str) -> tuple[list[str], str | None]:
+    """Blocking TXT lookup. Returns (list_of_txt_record_strings, error_message)."""
+    import dns.resolver
+    try:
+        answers = dns.resolver.resolve(name, "TXT", lifetime=TI_TIMEOUT)
+        records = []
+        for a in answers:
+            parts = getattr(a, "strings", [a.to_text()])
+            records.append("".join(p.decode() if isinstance(p, bytes) else p for p in parts))
+        return records, None
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+        return [], None
+    except Exception as exc:
+        return [], str(exc)
+
+async def enrich_url_email_auth(db: AsyncSession, domain: str) -> dict:
+    cached = await get_cached_enrichment(db, "domain", domain)
+    ea_cache = [c for c in cached if c.source == "email_auth"]
+    if ea_cache:
+        c = ea_cache[0]
+        rr = c.raw_response or {}
+        return {"source": "email_auth", "verdict": c.verdict, "spf": rr.get("spf"),
+                "dmarc_policy": rr.get("dmarc_policy"),
+                "dkim_selector_found": rr.get("dkim_selector_found"), "cached": True}
+
+    spf_records, _ = await asyncio.to_thread(_query_txt_sync, domain)
+    spf = next((r for r in spf_records if r.lower().startswith("v=spf1")), None)
+
+    dmarc_records, _ = await asyncio.to_thread(_query_txt_sync, f"_dmarc.{domain}")
+    dmarc = next((r for r in dmarc_records if r.lower().startswith("v=dmarc1")), None)
+    dmarc_policy = None
+    if dmarc:
+        m = re.search(r"p=(\w+)", dmarc, re.IGNORECASE)
+        dmarc_policy = m.group(1).lower() if m else None
+
+    dkim_results = await asyncio.gather(*[
+        asyncio.to_thread(_query_txt_sync, f"{sel}._domainkey.{domain}")
+        for sel in _COMMON_DKIM_SELECTORS
+    ])
+    dkim_selector_found = None
+    for selector, (records, _err) in zip(_COMMON_DKIM_SELECTORS, dkim_results):
+        if any("v=dkim1" in r.lower() or "p=" in r.lower() for r in records):
+            dkim_selector_found = selector
+            break
+
+    if not spf and not dmarc:
+        verdict = VERDICT_SUSPICIOUS
+    elif dmarc_policy == "none":
+        verdict = VERDICT_SUSPICIOUS
+    else:
+        verdict = VERDICT_CLEAN
+
+    await save_enrichment(db, "domain", domain, "email_auth", verdict,
+                           raw_response={"spf": spf, "dmarc_policy": dmarc_policy,
+                                         "dkim_selector_found": dkim_selector_found})
+
+    return {"source": "email_auth", "verdict": verdict, "spf": bool(spf),
+            "dmarc_policy": dmarc_policy, "dkim_selector_found": dkim_selector_found,
+            "cached": False}
+
+
 # ── URLhaus (abuse.ch) ────────────────────────────────────────────────────────
 async def enrich_url_urlhaus(db: AsyncSession, url: str) -> dict:
     if not URLHAUS_AUTH_KEY:
@@ -598,10 +720,13 @@ async def enrich_url(db: AsyncSession, raw_url: str,
     sources["urlscan"]    = await enrich_url_urlscan(db, url, domain)
     sources["spamhaus"]   = await enrich_url_spamhaus(db, domain)
     sources["surbl"]      = await enrich_url_surbl(db, domain)
+    sources["uribl"]      = await enrich_url_uribl(db, domain)
+    sources["sem"]        = await enrich_url_sem(db, domain)
     sources["urlhaus"]    = await enrich_url_urlhaus(db, url)
     sources["rdap"]       = await enrich_url_domain_age(db, domain)
     sources["safe_browsing"] = await enrich_url_safe_browsing(db, url)
     sources["phishtank"]  = await enrich_url_phishtank(db, url)
+    sources["email_auth"] = await enrich_url_email_auth(db, domain)
 
     overall = _overall_verdict([s.get("verdict", VERDICT_UNKNOWN) for s in sources.values()])
     investigated_at = datetime.now(UTC)
@@ -743,6 +868,26 @@ def generate_investigation_report(url: str, domain: str, sources: dict,
         lines.append("  Domain status    : NOT LISTED")
     lines.append("")
 
+    ur = sources.get("uribl", {})
+    lines.append("[URIBL]")
+    if ur.get("verdict") == VERDICT_UNKNOWN and ur.get("message"):
+        lines.append(f"  {ur['message']}")
+    elif ur.get("code"):
+        lines.append(f"  Domain status    : LISTED ({ur['code']})")
+    else:
+        lines.append("  Domain status    : NOT LISTED")
+    lines.append("")
+
+    sem = sources.get("sem", {})
+    lines.append("[SEM-URI]")
+    if sem.get("verdict") == VERDICT_UNKNOWN and sem.get("message"):
+        lines.append(f"  {sem['message']}")
+    elif sem.get("code"):
+        lines.append(f"  Domain status    : LISTED ({sem['code']})")
+    else:
+        lines.append("  Domain status    : NOT LISTED")
+    lines.append("")
+
     uh = sources["urlhaus"]
     lines.append("[URLhaus]")
     if uh["verdict"] == VERDICT_NO_KEY:
@@ -795,6 +940,23 @@ def generate_investigation_report(url: str, domain: str, sources: dict,
             lines.append(f"  Detail page      : {pt['detail_url']}")
     else:
         lines.append(f"  {pt.get('message', 'Not found in PhishTank database')}")
+    lines.append("")
+
+    ea = sources.get("email_auth", {})
+    lines.append("[Email Authentication (SPF/DMARC/DKIM)]")
+    lines.append(f"  SPF              : {'configured' if ea.get('spf') else 'NOT configured'}")
+    if ea.get("dmarc_policy"):
+        lines.append(f"  DMARC policy     : {ea['dmarc_policy']}")
+    else:
+        lines.append("  DMARC            : NOT configured")
+    if ea.get("dkim_selector_found"):
+        lines.append(f"  DKIM             : found (selector '{ea['dkim_selector_found']}')")
+    else:
+        lines.append("  DKIM             : not found under common selectors (inconclusive — "
+                      "DKIM selectors are arbitrary and can't be fully enumerated via DNS)")
+    if ea.get("verdict") == VERDICT_SUSPICIOUS:
+        lines.append("  NOTE: missing/weak email authentication makes this domain easier to "
+                      "spoof in phishing emails — relevant if this URL arrived via email.")
     lines.append("")
 
     lines.append("RECOMMENDATION")

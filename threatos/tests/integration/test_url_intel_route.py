@@ -64,6 +64,12 @@ async def test_investigate_returns_report_and_verdict(test_client: AsyncClient):
         return _fake_source("surbl", VERDICT_CLEAN)
     async def fake_pt(db, url):
         return _fake_source("phishtank", VERDICT_UNKNOWN, message="not found")
+    async def fake_uribl(db, domain):
+        return _fake_source("uribl", VERDICT_CLEAN)
+    async def fake_sem(db, domain):
+        return _fake_source("sem", VERDICT_CLEAN)
+    async def fake_email_auth(db, domain):
+        return _fake_source("email_auth", VERDICT_CLEAN, spf=True, dmarc_policy="reject")
 
     with patch("threatos.services.url_intel_service.enrich_url_virustotal", fake_vt), \
          patch("threatos.services.url_intel_service.enrich_url_urlscan", fake_urlscan), \
@@ -72,7 +78,10 @@ async def test_investigate_returns_report_and_verdict(test_client: AsyncClient):
          patch("threatos.services.url_intel_service.enrich_url_domain_age", fake_rdap), \
          patch("threatos.services.url_intel_service.enrich_url_safe_browsing", fake_gsb), \
          patch("threatos.services.url_intel_service.enrich_url_surbl", fake_surbl), \
-         patch("threatos.services.url_intel_service.enrich_url_phishtank", fake_pt):
+         patch("threatos.services.url_intel_service.enrich_url_phishtank", fake_pt), \
+         patch("threatos.services.url_intel_service.enrich_url_uribl", fake_uribl), \
+         patch("threatos.services.url_intel_service.enrich_url_sem", fake_sem), \
+         patch("threatos.services.url_intel_service.enrich_url_email_auth", fake_email_auth):
         resp = await test_client.post(
             "/api/url-intel/investigate", json={"url": "https://phish.example/login"})
 
@@ -82,7 +91,8 @@ async def test_investigate_returns_report_and_verdict(test_client: AsyncClient):
     assert data["domain"] == "phish.example"
     assert "VERDICT: MALICIOUS" in data["report_text"]
     assert set(data["sources"]) == {"virustotal", "urlscan", "spamhaus", "urlhaus", "rdap",
-                                     "safe_browsing", "surbl", "phishtank"}
+                                     "safe_browsing", "surbl", "phishtank", "uribl", "sem",
+                                     "email_auth"}
 
 
 @pytest.mark.asyncio
@@ -100,7 +110,10 @@ async def test_investigate_writes_audit_log_entry(test_client: AsyncClient, db_s
          patch("threatos.services.url_intel_service.enrich_url_domain_age", fake), \
          patch("threatos.services.url_intel_service.enrich_url_safe_browsing", fake), \
          patch("threatos.services.url_intel_service.enrich_url_surbl", fake), \
-         patch("threatos.services.url_intel_service.enrich_url_phishtank", fake):
+         patch("threatos.services.url_intel_service.enrich_url_phishtank", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_uribl", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_sem", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_email_auth", fake):
         resp = await test_client.post(
             "/api/url-intel/investigate", json={"url": "https://audited.example"})
 
@@ -145,6 +158,12 @@ async def test_history_lists_past_investigation_without_rescanning(test_client: 
         return _fake_source("surbl", VERDICT_CLEAN)
     async def fake_pt(db, url):
         return _fake_source("phishtank", VERDICT_UNKNOWN, message="not found")
+    async def fake_uribl(db, domain):
+        return _fake_source("uribl", VERDICT_CLEAN)
+    async def fake_sem(db, domain):
+        return _fake_source("sem", VERDICT_CLEAN)
+    async def fake_email_auth(db, domain):
+        return _fake_source("email_auth", VERDICT_CLEAN, spf=True, dmarc_policy="reject")
 
     with patch("threatos.services.url_intel_service.enrich_url_virustotal", fake_vt), \
          patch("threatos.services.url_intel_service.enrich_url_urlscan", fake_urlscan), \
@@ -153,7 +172,10 @@ async def test_history_lists_past_investigation_without_rescanning(test_client: 
          patch("threatos.services.url_intel_service.enrich_url_domain_age", fake_rdap), \
          patch("threatos.services.url_intel_service.enrich_url_safe_browsing", fake_gsb), \
          patch("threatos.services.url_intel_service.enrich_url_surbl", fake_surbl), \
-         patch("threatos.services.url_intel_service.enrich_url_phishtank", fake_pt):
+         patch("threatos.services.url_intel_service.enrich_url_phishtank", fake_pt), \
+         patch("threatos.services.url_intel_service.enrich_url_uribl", fake_uribl), \
+         patch("threatos.services.url_intel_service.enrich_url_sem", fake_sem), \
+         patch("threatos.services.url_intel_service.enrich_url_email_auth", fake_email_auth):
         investigate_resp = await test_client.post(
             "/api/url-intel/investigate", json={"url": "https://history-test.example/x"})
     investigation_id = investigate_resp.json()["id"]
