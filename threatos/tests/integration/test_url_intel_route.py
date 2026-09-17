@@ -86,6 +86,36 @@ async def test_investigate_returns_report_and_verdict(test_client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_investigate_writes_audit_log_entry(test_client: AsyncClient, db_session):
+    from sqlalchemy import select
+    from threatos.models.audit_log import AuditLog
+    from threatos.services.audit_service import Action, Resource
+
+    async def fake(*a, **kw): return {"source": "x", "verdict": VERDICT_CLEAN}
+
+    with patch("threatos.services.url_intel_service.enrich_url_virustotal", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_urlscan", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_spamhaus", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_domain_age", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_safe_browsing", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_surbl", fake), \
+         patch("threatos.services.url_intel_service.enrich_url_phishtank", fake):
+        resp = await test_client.post(
+            "/api/url-intel/investigate", json={"url": "https://audited.example"})
+
+    investigation_id = resp.json()["id"]
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.resource_id == investigation_id))
+    entry = result.scalar_one_or_none()
+    assert entry is not None
+    assert entry.action == Action.URL_INVESTIGATE
+    assert entry.resource == Resource.URL_INTEL
+    assert "audited.example" in entry.detail
+
+
+@pytest.mark.asyncio
 async def test_stats_reports_key_configuration(test_client: AsyncClient):
     resp = await test_client.get("/api/url-intel/stats")
     assert resp.status_code == 200

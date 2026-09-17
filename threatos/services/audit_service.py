@@ -52,6 +52,8 @@ class Action:
     BATCH_INGEST   = "batch_ingest"
     # Settings
     SETTINGS_UPDATE= "settings_update"
+    # URL intel
+    URL_INVESTIGATE= "url_investigate"
 
 # ── Resource constants ─────────────────────────────────────────────────────────
 class Resource:
@@ -66,6 +68,7 @@ class Resource:
     SCAN     = "scan"
     INGEST   = "ingest"
     SETTINGS = "settings"
+    URL_INTEL= "url_intel"
 
 def _get_ip(request: Request | None) -> str | None:
     if not request:

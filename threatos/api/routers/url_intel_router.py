@@ -1,5 +1,5 @@
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,6 +7,7 @@ from threatos.core.database import get_db
 from threatos.core.dependencies import get_current_user
 from threatos.models.ti_enrichment import TIEnrichment
 from threatos.models.user import User
+from threatos.services.audit_service import Action, Resource, audit
 from threatos.services.url_intel_service import (
     enrich_url, get_investigation, get_key_status, list_investigations,
 )
@@ -18,19 +19,28 @@ class InvestigateIn(BaseModel):
 
 @router.post("/investigate")
 async def investigate_url(
-    body: InvestigateIn,
+    body: InvestigateIn, request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Investigate a URL against VirusTotal, urlscan.io, Spamhaus DBL, and URLhaus.
-    Returns combined per-source results plus a plain-text report suitable for
+    Investigate a URL against VirusTotal, urlscan.io, Spamhaus DBL, SURBL,
+    URLhaus, RDAP domain age, Google Safe Browsing, and PhishTank. Returns
+    combined per-source results plus a plain-text report suitable for
     pasting into an email reply.
     """
     try:
         result = await enrich_url(db, body.url, investigated_by=current_user.username)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+    await audit(db, Action.URL_INVESTIGATE, Resource.URL_INTEL,
+                user_id=current_user.id, username=current_user.username,
+                role=current_user.role, resource_id=result["id"],
+                detail=f"'{current_user.username}' investigated {result['domain']} — "
+                       f"verdict={result['overall_verdict']}",
+                request=request)
+
     return result
 
 @router.get("/history")
