@@ -4,6 +4,18 @@ All notable changes to ThreatOS are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/), grouped by date rather than
 semantic version since this project doesn't yet cut versioned releases.
 
+## 2026-09-17 — Docs cleanup
+
+### Changed
+- Moved every loose documentation file (`.txt`/`.docx`/`.md` notes) that
+  was sitting at the repo root into `docs/`, where the rest of the
+  project's documentation already lives.
+- Removed `docs/README.md`, a stale duplicate of the root `README.md`
+  (still referenced the old internal hostname and pre-fix rule counts —
+  superseded by the real README, not a second source of truth).
+- Resolved one filename collision between a root-level and a `docs/`
+  copy of the same troubleshooting note by keeping the newer content.
+
 ## 2026-09-17 — URL Scanner
 
 ### Added

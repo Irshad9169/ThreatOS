@@ -46,6 +46,7 @@ Should Do Within First Month
 Currently you manually push events to Redis. Without real log sources, ThreatOS has no data to detect against. Options in order of effort:
 ConnectorEffortWhat it doesSyslog receiverLowLinux servers send syslog directly to ThreatOSWEF forwarderMediumWindows Event Forwarding to ThreatOSFilebeat/Elastic AgentLowForward existing Elastic logs to Redis streamDirect script on each serverLowCron job ships events via API key
 The simplest approach for your environment — a Python agent on each server that reads Windows Event Log or syslog and POSTs to /api/ingest/event using an API key.
+
 5. Prometheus + Grafana
 Already designed, just needs a machine with disk space. The /metrics endpoint is live and ready to scrape.
 6. Alert notifications
@@ -71,7 +72,7 @@ This week:
   4. Register all your real servers as assets
 
 Next week:
-  5. Set up Prometheus + Grafana on a separate machine
+  5. Set up Prometheus + Grafana on a separate machine ---------- ✅Done
   6. Connect one real log source (start with syslog from one Linux server)
   7. Set up alert notifications (Teams webhook)
 
