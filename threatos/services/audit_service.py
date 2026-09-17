@@ -50,6 +50,8 @@ class Action:
     # Ingest
     EVENT_INGEST   = "event_ingest"
     BATCH_INGEST   = "batch_ingest"
+    # Settings
+    SETTINGS_UPDATE= "settings_update"
 
 # ── Resource constants ─────────────────────────────────────────────────────────
 class Resource:
@@ -63,6 +65,7 @@ class Resource:
     PURPLE   = "purple"
     SCAN     = "scan"
     INGEST   = "ingest"
+    SETTINGS = "settings"
 
 def _get_ip(request: Request | None) -> str | None:
     if not request:

@@ -8,7 +8,7 @@ from threatos.api.routers import (
     compliance_router, coverage_router, detection_router, events_router,
     health_router, ingest_router, metrics_router, purple_router,
     report_router, retention_router, rules_router, scans_router,
-    ti_router, url_intel_router, ws_router, auth_router,
+    settings_router, ti_router, url_intel_router, ws_router, auth_router,
 )
 from threatos.core.database import get_db_context
 from threatos.core.logging_config import configure_logging
@@ -77,4 +77,5 @@ app.include_router(detection_router.router,  prefix="/api/detection", tags=["det
 app.include_router(compliance_router.router, prefix="/api/compliance",tags=["compliance"])
 app.include_router(ti_router.router,         prefix="/api/ti",        tags=["threat-intel"])
 app.include_router(url_intel_router.router,  prefix="/api/url-intel", tags=["url-intel"])
+app.include_router(settings_router.router,   prefix="/api/settings",  tags=["settings"])
 app.include_router(ws_router.router,         prefix="/ws",            tags=["websocket"])

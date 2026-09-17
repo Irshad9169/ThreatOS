@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { apiClient } from '../lib/api'
+import { ApiKeyCard } from '../components/ApiKeyCard'
 
 interface Stats {
   total_cached: number
@@ -176,27 +177,10 @@ export function UrlIntel() {
 
       {s && (
         <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
-          {[
-            { name: 'urlscan.io', ok: s.urlscan_key, url: 'https://urlscan.io/user/signup' },
-            { name: 'URLhaus',    ok: s.urlhaus_key, url: 'https://auth.abuse.ch/' },
-          ].map(api => (
-            <div key={api.name} style={{
-              background: 'var(--bg2)', border: `1px solid ${api.ok ? '#a6e3a144' : '#f38ba844'}`,
-              borderRadius: 8, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10,
-            }}>
-              <span style={{ fontSize: 16 }}>{api.ok ? '✅' : '❌'}</span>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>{api.name}</div>
-                <div style={{ fontSize: 11, color: 'var(--muted)' }}>
-                  {api.ok ? 'API key configured' : (
-                    <a href={api.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }}>
-                      Get free API key →
-                    </a>
-                  )}
-                </div>
-              </div>
-            </div>
-          ))}
+          <ApiKeyCard keyName="URLSCAN_API_KEY" label="urlscan.io" configured={s.urlscan_key}
+            signupUrl="https://urlscan.io/user/signup" />
+          <ApiKeyCard keyName="URLHAUS_AUTH_KEY" label="URLhaus" configured={s.urlhaus_key}
+            signupUrl="https://auth.abuse.ch/" />
           <div style={{
             background: 'var(--bg2)', border: '1px solid #a6e3a144',
             borderRadius: 8, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10,

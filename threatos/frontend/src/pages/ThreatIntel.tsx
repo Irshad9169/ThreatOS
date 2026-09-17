@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiClient } from '../lib/api'
 import { Badge } from '../components/Badge'
+import { ApiKeyCard } from '../components/ApiKeyCard'
 
 interface TIStats {
   total_cached:   number
@@ -124,28 +125,10 @@ export function ThreatIntel() {
       {/* API key status */}
       {s && (
         <div style={{ display:'flex', gap:10, marginBottom:16, flexWrap:'wrap' }}>
-          {[
-            { name:'VirusTotal',  ok: s.virustotal_key, url:'https://www.virustotal.com/gui/my-apikey' },
-            { name:'AbuseIPDB',   ok: s.abuseipdb_key,  url:'https://www.abuseipdb.com/account/api' },
-          ].map(api => (
-            <div key={api.name} style={{ background:'var(--bg2)',
-              border:`1px solid ${api.ok ? '#a6e3a144' : '#f38ba844'}`,
-              borderRadius:8, padding:'10px 16px',
-              display:'flex', alignItems:'center', gap:10 }}>
-              <span style={{ fontSize:16 }}>{api.ok ? '✅' : '❌'}</span>
-              <div>
-                <div style={{ fontSize:13, fontWeight:600 }}>{api.name}</div>
-                <div style={{ fontSize:11, color:'var(--muted)' }}>
-                  {api.ok ? 'API key configured' : (
-                    <a href={api.url} target="_blank" rel="noopener noreferrer"
-                      style={{ color:'var(--accent)' }}>
-                      Get free API key →
-                    </a>
-                  )}
-                </div>
-              </div>
-            </div>
-          ))}
+          <ApiKeyCard keyName="VIRUSTOTAL_API_KEY" label="VirusTotal" configured={s.virustotal_key}
+            signupUrl="https://www.virustotal.com/gui/my-apikey" />
+          <ApiKeyCard keyName="ABUSEIPDB_API_KEY" label="AbuseIPDB" configured={s.abuseipdb_key}
+            signupUrl="https://www.abuseipdb.com/account/api" />
 
           {/* Stats */}
           {[
