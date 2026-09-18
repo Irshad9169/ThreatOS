@@ -4,6 +4,16 @@ All notable changes to ThreatOS are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/), grouped by date rather than
 semantic version since this project doesn't yet cut versioned releases.
 
+## 2026-09-18 — Redis upgrade guide
+
+### Added
+- `docs/redis_upgrade_guide.md` — step-by-step Redis 5.x → 6.2+ upgrade
+  instructions for Oracle Linux 8, confirming no code changes are
+  required on either side of the upgrade (both the RESP2 `protocol=2`
+  workaround and `_reclaim_pending()`'s `XAUTOCLAIM` call degrade/upgrade
+  gracefully at runtime with no version checks). README's "Known
+  Limitations" now links to it.
+
 ## 2026-09-18 — Threat Intel alert-enrichment fixes
 
 Found via a targeted test-coverage audit of `ti_service.py`/`ti_router.py`

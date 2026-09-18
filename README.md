@@ -1034,7 +1034,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
 
 ## Known Limitations
 
-- **Redis 5** — XAUTOCLAIM command not supported (added in Redis 6.2). Worker falls back gracefully with a warning. Upgrade Redis to 6.2+ to enable crash recovery.
+- **Redis 5** — XAUTOCLAIM command not supported (added in Redis 6.2). Worker falls back gracefully with a warning. Upgrade Redis to 6.2+ to enable crash recovery — see [docs/redis_upgrade_guide.md](docs/redis_upgrade_guide.md) for step-by-step instructions; no code changes are needed either side of the upgrade.
 - **Windows log sources** — Windows Event Forwarding not yet configured. Sigma Windows rules are loaded and ready — they activate when Windows events start flowing.
 - **HTTPS** — not yet configured. Request certificate from IT team for production use.
 - **Single server** — all components run on one server. Can be split for scale.
