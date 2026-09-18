@@ -1,0 +1,54 @@
+name: CI
+
+"on":
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend tests (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package with dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run test suite
+        run: pytest threatos/tests -q
+
+      - name: Lint (ruff, informational only)
+        if: always()
+        run: ruff check threatos/ || true
+
+  frontend:
+    name: Frontend build (React/TypeScript)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: threatos/frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: threatos/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck + production build
+        run: npm run build
+
+      - name: Lint (informational only — pre-existing violations not yet cleaned up)
+        if: always()
+        run: npm run lint || true

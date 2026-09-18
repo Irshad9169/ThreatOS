@@ -1,5 +1,7 @@
 # ThreatOS
 
+[![CI](https://github.com/Irshad9169/ThreatOS/actions/workflows/ci.yml/badge.svg)](https://github.com/Irshad9169/ThreatOS/actions/workflows/ci.yml)
+
 **MITRE ATT&CK-Aware Security Operations Platform**
 
 ThreatOS is a full-stack Security Information and Event Management (SIEM) platform built for internal infrastructure. It ingests logs from Linux and Windows servers, evaluates every event against 3,044 detection rules mapped to the MITRE ATT&CK framework, generates real-time alerts, and provides a React-based security operations dashboard.

@@ -4,6 +4,18 @@ All notable changes to ThreatOS are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/), grouped by date rather than
 semantic version since this project doesn't yet cut versioned releases.
 
+## 2026-09-18 — CI pipeline
+
+### Added
+- `.github/workflows/ci.yml` — runs the backend test suite (Python, no
+  external services needed since tests run against SQLite in-memory) and
+  the frontend typecheck + production build on every push/PR to `main`.
+  `ruff` and `eslint` run too but are informational only (`|| true`) —
+  the codebase currently has ~480 pre-existing `ruff` findings and a
+  handful of `eslint` ones that predate this pipeline and haven't been
+  cleaned up, so making lint a hard gate now would block unrelated work.
+- CI status badge in `README.md`.
+
 ## 2026-09-17 — Docs cleanup
 
 ### Changed
