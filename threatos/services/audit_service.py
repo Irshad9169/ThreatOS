@@ -54,6 +54,8 @@ class Action:
     SETTINGS_UPDATE= "settings_update"
     # URL intel
     URL_INVESTIGATE= "url_investigate"
+    # Threat intel
+    TI_ENRICHMENT  = "ti_enrichment"
 
 # ── Resource constants ─────────────────────────────────────────────────────────
 class Resource:

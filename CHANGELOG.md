@@ -4,6 +4,47 @@ All notable changes to ThreatOS are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/), grouped by date rather than
 semantic version since this project doesn't yet cut versioned releases.
 
+## 2026-09-18 — Threat Intel alert-enrichment fixes
+
+Found via a targeted test-coverage audit of `ti_service.py`/`ti_router.py`
+(the original IP/hash/domain enrichment feature — never directly tested
+despite `url_intel_service.py` reusing its cache internals).
+
+### Fixed
+- **`Alert` model was missing `ti_enriched`/`ti_verdict`/`ti_summary`
+  columns** even though migration 007 already added them to the real
+  `alerts` table via `ALTER TABLE`. Since the ORM never declared them:
+  `GET /api/ti/alert/{id}` and `POST /api/ti/enrich-open-alerts` both
+  crashed with a 500 on any real alert; `POST /api/ti/enrich-alert/{id}`
+  didn't crash but silently never persisted its result (SQLAlchemy only
+  tracks declared mapped columns for writes). This is the most
+  significant bug found this session — a whole documented feature
+  (Threat Intelligence alert enrichment) was non-functional in
+  production.
+- `ti_router.py` built its alert-to-IOC dict from `getattr(alert,
+  "src_ip"/"dst_ip"/"file_hash", None)` — none of which are real columns
+  on `Alert` (only `entity_ip` and `raw_match` exist), so those always
+  silently resolved to `None`. An alert's actual IP (`entity_ip`) was
+  never checked against VirusTotal/AbuseIPDB via any of the three
+  alert-enrichment routes; only `entity_host` ever got enriched. Fixed
+  to use `entity_ip` and pass `raw_match` through as `raw_fields` (so
+  file hashes/domains embedded in the rule match payload get picked up
+  too, matching `extract_iocs_from_alert`'s existing support for that).
+- `enrich_abuseipdb()` computed a local `asn` variable from
+  `abuseConfidenceScore` (a number, not an ASN — dead/wrong code, never
+  actually used) and omitted `asn` from the fresh-lookup response
+  entirely, while the cached-path response included it — an
+  inconsistent response shape depending on cache state. Now consistently
+  uses the ISP name for both.
+- `ti_router.py`'s audit-log call used a raw `"ti_enrichment"` string
+  instead of an `Action` constant, inconsistent with every other router;
+  added `Action.TI_ENRICHMENT`.
+
+54 new tests (41 unit for `ti_service.py`, 13 integration for
+`ti_router.py`, including a regression test that reads the raw DB row
+after enrichment to prove the fix persists, not just that it doesn't
+crash). Full suite: 576 passed, 1 skipped.
+
 ## 2026-09-18 — URL Scanner source health monitoring
 
 ### Added

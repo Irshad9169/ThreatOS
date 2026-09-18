@@ -58,9 +58,8 @@ async def enrich_alert_route(
     alert_data = {
         "entity_host":  alert.entity_host,
         "entity_user":  alert.entity_user,
-        "src_ip":       getattr(alert, "src_ip", None),
-        "dst_ip":       getattr(alert, "dst_ip", None),
-        "file_hash":    getattr(alert, "file_hash", None),
+        "src_ip":       alert.entity_ip,
+        "raw_fields":   alert.raw_match or {},
     }
 
     result = await enrich_alert(db, alert_data)
@@ -72,7 +71,7 @@ async def enrich_alert_route(
     await db.flush()
 
     from threatos.services.audit_service import audit, Action, Resource
-    await audit(db, "ti_enrichment", Resource.ALERT,
+    await audit(db, Action.TI_ENRICHMENT, Resource.ALERT,
                 user_id=current_user.id, username=current_user.username,
                 role=current_user.role, resource_id=alert_id,
                 detail=f"TI enrichment: {result['iocs_found']} IOCs — "
@@ -99,9 +98,8 @@ async def get_alert_enrichments(
 
     alert_data = {
         "entity_host": alert.entity_host,
-        "src_ip":      getattr(alert, "src_ip", None),
-        "dst_ip":      getattr(alert, "dst_ip", None),
-        "file_hash":   getattr(alert, "file_hash", None),
+        "src_ip":      alert.entity_ip,
+        "raw_fields":  alert.raw_match or {},
     }
 
     iocs = extract_iocs_from_alert(alert_data)
@@ -157,9 +155,8 @@ async def enrich_open_alerts(
     for alert in alerts:
         alert_data = {
             "entity_host": alert.entity_host,
-            "src_ip":      getattr(alert, "src_ip", None),
-            "dst_ip":      getattr(alert, "dst_ip", None),
-            "file_hash":   getattr(alert, "file_hash", None),
+            "src_ip":      alert.entity_ip,
+            "raw_fields":  alert.raw_match or {},
         }
         enrichment = await enrich_alert(db, alert_data)
         alert.ti_enriched = True

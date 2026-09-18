@@ -279,18 +279,18 @@ async def enrich_abuseipdb(db: AsyncSession, ip_address: str) -> dict:
             verdict = VERDICT_CLEAN
 
         country = data.get("countryCode")
-        asn     = f"AS{data.get('abuseConfidenceScore','')} {data.get('isp','')}"
+        isp     = data.get("isp")
         tags    = data.get("usageType","").split(",") if data.get("usageType") else []
         total_reports = data.get("totalReports", 0)
 
         await save_enrichment(db, "ip", ip_address, "abuseipdb",
                                verdict, score=score, country=country,
-                               asn=data.get("isp"), tags=tags,
+                               asn=isp, tags=tags,
                                raw_response={"score":score,"reports":total_reports,
-                                             "isp":data.get("isp"),"domain":data.get("domain")})
+                                             "isp":isp,"domain":data.get("domain")})
 
         return {"source":"abuseipdb","verdict":verdict,"score":score,
-                "country":country,"isp":data.get("isp"),
+                "country":country,"asn":isp,"isp":isp,
                 "total_reports":total_reports,"tags":tags,"cached":False}
 
     except httpx.TimeoutException:

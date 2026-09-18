@@ -1,7 +1,7 @@
 from __future__ import annotations
 import uuid
 from datetime import datetime
-from sqlalchemy import CheckConstraint, DateTime, Float, Index, Integer, String
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from threatos.models.base import Base
 from threatos.models.raw_event import JSONBCompat
@@ -30,6 +30,14 @@ class Alert(Base):
     closed_at:         Mapped[datetime|None] = mapped_column(DateTime(timezone=True), nullable=True)
     description:       Mapped[str|None]  = mapped_column(String(500), nullable=True)
     raw_match:         Mapped[dict|None] = mapped_column(JSONBCompat, nullable=True)
+    # Added by migration 007 (ALTER TABLE) — declared here so the ORM
+    # actually knows about them; previously missing, which meant
+    # Alert.ti_enriched raised AttributeError in queries and
+    # alert.ti_enriched = True silently never persisted (SQLAlchemy's
+    # unit-of-work only tracks declared mapped columns).
+    ti_enriched:       Mapped[bool]      = mapped_column(Boolean, nullable=False, default=False)
+    ti_verdict:        Mapped[str|None]  = mapped_column(String(20), nullable=True)
+    ti_summary:        Mapped[str|None]  = mapped_column(Text, nullable=True)
     __table_args__ = (
         CheckConstraint("status IN ('open','investigating','escalated','closed','false_positive')", name="ck_alerts_status"),
         Index("ix_alerts_technique_id", "technique_id"),
