@@ -4,7 +4,19 @@ All notable changes to ThreatOS are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/), grouped by date rather than
 semantic version since this project doesn't yet cut versioned releases.
 
-## 2026-09-18 — Redis upgrade guide
+## 2026-09-18 — Redis upgraded to 6.2.20 on production
+
+### Changed
+- Redis upgraded from 5.0.3 → 6.2.20 on the deployment server via
+  Oracle Linux 8's `redis:6` AppStream module (`docs/redis_upgrade_guide.md`,
+  Option A). No code changes needed — confirmed via `journalctl -u
+  threatos-worker`: the pre-upgrade worker process logged `XAUTOCLAIM
+  failed (Redis may not support it)` every ~30s right up until shutdown;
+  the post-upgrade worker process started clean with `crash_recovery=
+  enabled` and zero XAUTOCLAIM warnings. Crash-recovery reclaim (a
+  worker picking back up messages left pending by another worker that
+  died mid-processing) is now actually functional for the first time.
+- README's "Known Limitations" Redis-5 entry marked resolved.
 
 ### Added
 - `docs/redis_upgrade_guide.md` — step-by-step Redis 5.x → 6.2+ upgrade
