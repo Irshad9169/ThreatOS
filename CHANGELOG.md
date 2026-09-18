@@ -4,6 +4,42 @@ All notable changes to ThreatOS are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/), grouped by date rather than
 semantic version since this project doesn't yet cut versioned releases.
 
+## 2026-09-18 — Suppression and audit hash-chain fixes (test-coverage audit)
+
+Continuation of the targeted test-coverage audit into the two remaining
+untested services flagged earlier: `suppression_service.py` and
+`compliance_service.py`.
+
+### Fixed
+- **Alert-storm suppression didn't work within a single ingest batch.**
+  `_check_suppression()` in `ingest_worker.py` checked candidate alerts
+  against already-*persisted* DB rows before the batch's own alerts had
+  been persisted — so a burst of identical rule+host events landing in
+  the same batch (exactly the scenario the 15-minute dedup window exists
+  for) all sailed through as separate alerts; suppression only ever
+  caught duplicates across *separate* batches. Fixed by tracking rule+host
+  keys already seen within the current batch (via the previously-unused
+  `_suppression_key()` helper) in addition to the existing DB check.
+- **Audit-log hash-chain tamper detection was entirely disconnected.**
+  `AuditLog` never declared `prev_hash`/`entry_hash` as mapped columns
+  (migration 006 added them to the real table via `ALTER TABLE` only) —
+  the same class of bug as the earlier TI-enrichment fix. On top of that,
+  `stamp_audit_entry()` was never actually called from `audit_service.
+  audit()`, the function every router uses to write audit entries — so
+  no audit entry ever got hashed, and `GET /api/compliance/audit-integrity`
+  would raise `AttributeError` the instant it queried `AuditLog.entry_hash`.
+  Both fixed: columns declared, and `audit()` now stamps every entry it
+  writes.
+- Hardened chain ordering: replaced ordering by `timestamp` (a wall-clock
+  value that can tie under back-to-back writes, which isn't a safe
+  ordering key for a tamper-evidence chain) with a new strictly-increasing
+  `seq` column (migration 010), used only for chain ordering.
+
+65 new tests (14 for `compliance_service.py` — sessions plus hash-chain
+stamping/verification/tamper-detection; 15 for `suppression_service.py`;
+1 worker-level regression proving the intra-batch fix actually collapses
+a 5-event burst into 1 alert). Full suite: 605 passed, 1 skipped.
+
 ## 2026-09-18 — Redis upgraded to 6.2.20 on production
 
 ### Changed

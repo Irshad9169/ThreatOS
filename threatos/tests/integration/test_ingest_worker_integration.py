@@ -242,3 +242,31 @@ async def test_empty_stream_produces_no_alerts(redis_with_group, cache, db_sessi
 
     assert alerts_n == 0
     assert events_n == 0
+
+
+@pytest.mark.asyncio
+async def test_burst_of_duplicate_events_in_one_batch_suppressed(
+    redis_with_group, cache, db_session
+):
+    """Regression: suppression previously only caught duplicates across
+    separate batches, never within a single batch, because
+    _check_suppression queried the DB before any of the batch's own
+    alerts had been persisted. A burst of 5 identical rule+host events
+    landing in the same batch (the exact alert-storm scenario
+    suppression exists for) must collapse to a single alert."""
+    _load_ps_rule()
+    await cache.set("WIN-VICTIM", 2)
+    for _ in range(5):
+        await redis_with_group.xadd(STREAM, _fields())
+    raw      = await redis_with_group.xreadgroup(GROUP, "test-worker",
+                                                  streams={STREAM: ">"}, count=10)
+    messages = raw[0][1]
+
+    with patch("threatos.workers.ingest_worker.get_db_context",
+               _make_db_ctx(db_session)):
+        alerts_n, events_n = await _process_batch(redis_with_group, messages, cache)
+
+    assert events_n == 5
+    assert alerts_n == 1
+    row = (await db_session.execute(text("SELECT COUNT(*) FROM alerts"))).scalar()
+    assert row == 1

@@ -140,14 +140,22 @@ async def get_latest_audit_hash(db: AsyncSession) -> str:
     result = await db.execute(
         select(AuditLog.entry_hash).where(
             AuditLog.entry_hash.isnot(None)
-        ).order_by(AuditLog.timestamp.desc()).limit(1)
+        ).order_by(AuditLog.seq.desc()).limit(1)
     )
     row = result.scalar_one_or_none()
     return row or "GENESIS"
 
 async def stamp_audit_entry(db: AsyncSession, entry: AuditLog) -> None:
-    """Add hash chain to an audit log entry."""
+    """Add hash chain to an audit log entry.
+
+    `seq` is assigned here rather than relying on `timestamp` for chain
+    ordering — two entries can share the same wall-clock tick under
+    back-to-back writes, which `timestamp` can't break ties on
+    consistently between this lookup and verify_audit_chain's replay.
+    """
     try:
+        max_seq   = (await db.execute(select(func.max(AuditLog.seq)))).scalar() or 0
+        entry.seq = max_seq + 1
         prev_hash    = await get_latest_audit_hash(db)
         entry_hash   = _compute_entry_hash(entry, prev_hash)
         entry.prev_hash  = prev_hash
@@ -164,7 +172,7 @@ async def verify_audit_chain(db: AsyncSession,
     result = await db.execute(
         select(AuditLog).where(
             AuditLog.entry_hash.isnot(None)
-        ).order_by(AuditLog.timestamp.asc()).limit(limit)
+        ).order_by(AuditLog.seq.asc()).limit(limit)
     )
     entries = result.scalars().all()
 

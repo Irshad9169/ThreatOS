@@ -119,6 +119,12 @@ async def audit(
         )
         db.add(entry)
         await db.flush()
+        # Hash-chain stamping needs entry.id (assigned by the flush above)
+        # and reads the DB for the previous entry's hash, so it must run
+        # after the flush, not before.
+        from threatos.services.compliance_service import stamp_audit_entry
+        await stamp_audit_entry(db, entry)
+        await db.flush()
     except Exception as exc:
         log.error("Failed to write audit log: %s", exc)
 

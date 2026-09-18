@@ -12,7 +12,7 @@ from threatos.detection.rule_engine import (
 from threatos.ingestion.normalizer import NormalizedEvent
 from threatos.services.alert_service import persist_alerts_bulk
 from threatos.services.asset_service import get_asset_by_hostname
-from threatos.services.suppression_service import is_suppressed
+from threatos.services.suppression_service import _suppression_key, is_suppressed
 
 log = logging.getLogger(__name__)
 
@@ -92,19 +92,34 @@ async def _process_message(msg_id: str, fields: dict,
     return matches
 
 async def _check_suppression(alerts: list[dict]) -> list[dict]:
-    """Filter out suppressed alerts (dedup within window)."""
+    """Filter out suppressed alerts (dedup within window).
+
+    ``is_suppressed`` only sees already-persisted Alert rows, so it can't
+    catch duplicates that arrive together in the same batch (the exact
+    burst scenario suppression exists for) — those get checked against a
+    DB that doesn't have any of them yet. Track rule+host keys already
+    seen within this batch and suppress repeats before they ever reach
+    the DB check.
+    """
     if not alerts:
         return []
     non_suppressed = []
+    seen_in_batch: set[str] = set()
     async with get_db_context() as db:
         for alert in alerts:
             rule_id = alert.get("rule_id","")
             host    = alert.get("entity_host")
+            key = _suppression_key(rule_id, host)
+            if key in seen_in_batch:
+                log.debug("Suppressed duplicate alert within batch: rule=%s host=%s",
+                          rule_id, host)
+                continue
             if await is_suppressed(db, rule_id, host):
                 log.debug("Suppressed duplicate alert: rule=%s host=%s",
                           rule_id, host)
-            else:
-                non_suppressed.append(alert)
+                continue
+            seen_in_batch.add(key)
+            non_suppressed.append(alert)
     return non_suppressed
 
 async def _process_batch(redis: aioredis.Redis, messages: list,
