@@ -17,11 +17,12 @@ from threatos.models.user_session import UserSession
 from threatos.models.rule_change_request import RuleChangeRequest
 from threatos.models.ti_enrichment import TIEnrichment
 from threatos.models.url_investigation import UrlInvestigation
+from threatos.models.source_health_event import SourceHealthEvent
 
 __all__ = [
     "Base","RawEvent","DetectionRule","Alert","CoverageMatrix",
     "Asset","AttackChain","PurpleTeamRun","ScanResult","User",
     "AuditLog","TokenBlacklist","LoginAttempt","RuleMetrics",
     "RuleVersion","UserSession","RuleChangeRequest","TIEnrichment",
-    "UrlInvestigation",
+    "UrlInvestigation","SourceHealthEvent",
 ]

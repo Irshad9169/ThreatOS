@@ -6,14 +6,15 @@ import logging
 import os
 import re
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
 import httpx
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from threatos.models.source_health_event import SourceHealthEvent
 from threatos.models.url_investigation import UrlInvestigation
 from threatos.services.settings_service import refresh_from_env_file
 from threatos.services.ti_service import (
@@ -713,6 +714,97 @@ def _overall_verdict(verdicts: list[str]) -> str:
     if VERDICT_CLEAN in verdicts:      return VERDICT_CLEAN
     return VERDICT_UNKNOWN
 
+_ALL_SOURCE_NAMES = (
+    "virustotal", "urlscan", "spamhaus", "surbl", "uribl", "sem", "urlhaus",
+    "rdap", "safe_browsing", "phishtank", "email_auth",
+)
+
+# ── Source health monitoring ──────────────────────────────────────────────────
+# Classifies each source's outcome without needing every one of the 11
+# enrichment functions to explicitly report it — derived from the same
+# verdict/message shape they already return. Not perfectly precise (a
+# message-text heuristic), but good enough to catch a source going from
+# "occasionally errors" to "always errors", which is the actual signal
+# worth alerting on (e.g. PhishTank's auth policy tightening mid-2026).
+_ERROR_MESSAGE_MARKERS = ("timed out", "http ", "failed", "rate limit",
+                          "rate-limited", "exceeded")
+
+def _classify_outcome(result: dict) -> str:
+    if result.get("verdict") == VERDICT_NO_KEY:
+        return "no_key"
+    message = (result.get("message") or "").lower()
+    if any(marker in message for marker in _ERROR_MESSAGE_MARKERS):
+        return "error"
+    return "ok"
+
+async def _record_source_health(db: AsyncSession, sources: dict, occurred_at: datetime) -> None:
+    for source_name, result in sources.items():
+        db.add(SourceHealthEvent(
+            id=str(uuid.uuid4()), source=source_name,
+            outcome=_classify_outcome(result), message=result.get("message"),
+            occurred_at=occurred_at,
+        ))
+    await db.flush()
+
+async def get_source_health(db: AsyncSession, window_days: int = 7,
+                             min_samples: int = 5, error_rate_threshold: float = 0.5) -> list[dict]:
+    """Per-source health over the last `window_days`. status is:
+    - "no_data"  — never checked
+    - "healthy"  — few/no errors, or not enough samples yet to judge
+    - "degraded" — error rate >= threshold with enough samples to trust it
+    """
+    since = datetime.now(UTC) - timedelta(days=window_days)
+    result = await db.execute(
+        select(SourceHealthEvent.source, SourceHealthEvent.outcome,
+               func.count(SourceHealthEvent.id))
+        .where(SourceHealthEvent.occurred_at >= since)
+        .group_by(SourceHealthEvent.source, SourceHealthEvent.outcome)
+    )
+    counts: dict[str, dict[str, int]] = {}
+    for source_name, outcome, count in result.all():
+        counts.setdefault(source_name, {})[outcome] = count
+
+    last_error_result = await db.execute(
+        select(SourceHealthEvent.source, func.max(SourceHealthEvent.occurred_at))
+        .where(SourceHealthEvent.outcome == "error", SourceHealthEvent.occurred_at >= since)
+        .group_by(SourceHealthEvent.source)
+    )
+    last_error_at = dict(last_error_result.all())
+
+    last_message_result = await db.execute(
+        select(SourceHealthEvent.source, SourceHealthEvent.message)
+        .where(SourceHealthEvent.outcome == "error", SourceHealthEvent.occurred_at >= since)
+        .order_by(SourceHealthEvent.occurred_at.desc())
+    )
+    last_error_message: dict[str, str] = {}
+    for source_name, message in last_message_result.all():
+        last_error_message.setdefault(source_name, message)
+
+    health = []
+    for source_name in _ALL_SOURCE_NAMES:
+        by_outcome = counts.get(source_name, {})
+        total = sum(by_outcome.values())
+        errors = by_outcome.get("error", 0)
+        error_rate = (errors / total) if total else 0.0
+
+        if total == 0:
+            status = "no_data"
+        elif total >= min_samples and error_rate >= error_rate_threshold:
+            status = "degraded"
+        else:
+            status = "healthy"
+
+        health.append({
+            "source": source_name, "status": status, "total_checks": total,
+            "ok": by_outcome.get("ok", 0), "no_key": by_outcome.get("no_key", 0),
+            "errors": errors, "error_rate": round(error_rate, 2),
+            "last_error_at": last_error_at.get(source_name).isoformat()
+                              if last_error_at.get(source_name) else None,
+            "last_error_message": last_error_message.get(source_name),
+        })
+    return health
+
+
 async def enrich_url(db: AsyncSession, raw_url: str,
                       investigated_by: str | None = None) -> dict:
     refresh_from_env_file()
@@ -733,6 +825,8 @@ async def enrich_url(db: AsyncSession, raw_url: str,
 
     overall = _overall_verdict([s.get("verdict", VERDICT_UNKNOWN) for s in sources.values()])
     investigated_at = datetime.now(UTC)
+
+    await _record_source_health(db, sources, investigated_at)
 
     report_text = generate_investigation_report(
         url, domain, sources, overall, investigated_by, investigated_at)

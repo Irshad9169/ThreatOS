@@ -42,6 +42,18 @@ interface HistoryEntry {
   investigated_at: string
 }
 
+interface SourceHealthEntry {
+  source: string
+  status: 'no_data' | 'healthy' | 'degraded'
+  total_checks: number
+  ok: number
+  no_key: number
+  errors: number
+  error_rate: number
+  last_error_at: string | null
+  last_error_message: string | null
+}
+
 const VERDICT_COLORS: Record<string, string> = {
   malicious:  '#f38ba8',
   suspicious: '#fab387',
@@ -223,6 +235,12 @@ export function UrlIntel() {
     queryFn:  () => apiClient.get<HistoryEntry[]>('/url-intel/history').then(r => r.data),
   })
 
+  const health = useQuery({
+    queryKey: ['url-intel-health'],
+    queryFn:  () => apiClient.get<SourceHealthEntry[]>('/url-intel/health').then(r => r.data),
+    refetchInterval: 60_000,
+  })
+
   const investigate = useMutation({
     mutationFn: (u: string) =>
       apiClient.post<InvestigateResult>('/url-intel/investigate', { url: u }).then(r => r.data),
@@ -230,6 +248,7 @@ export function UrlIntel() {
       setResult(data)
       setCopied(false)
       history.refetch()
+      health.refetch()
     },
   })
 
@@ -464,6 +483,43 @@ export function UrlIntel() {
               ))}
             </tbody>
           </table>
+        )}
+      </div>
+
+      <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)',
+        borderRadius: 8, padding: 16, marginTop: 16 }}>
+        <h3 style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+          Source Health (last 7 days)
+        </h3>
+        <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 12 }}>
+          Flags a source whose recent checks are mostly failing — catches a
+          provider silently changing behavior (auth policy, rate limits)
+          before an analyst runs into bad results.
+        </div>
+        {health.data && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {health.data.map(h => {
+              const dotColor = h.status === 'degraded' ? '#f38ba8'
+                : h.status === 'healthy' ? '#a6e3a1' : '#6c7086'
+              return (
+                <div key={h.source} title={h.last_error_message || undefined}
+                  style={{ background: 'var(--bg3)',
+                    border: `1px solid ${dotColor}44`, borderRadius: 6,
+                    padding: '6px 10px', fontSize: 11, display: 'flex',
+                    alignItems: 'center', gap: 6, minWidth: 120 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%',
+                    background: dotColor, flexShrink: 0 }} />
+                  <div>
+                    <div style={{ fontWeight: 600 }}>{h.source}</div>
+                    <div style={{ color: 'var(--muted)' }}>
+                      {h.status === 'no_data' ? 'no checks yet'
+                        : `${h.errors}/${h.total_checks} errors`}
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
         )}
       </div>
     </div>

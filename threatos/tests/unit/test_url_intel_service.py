@@ -20,12 +20,12 @@ from threatos.services.ti_service import (
     VERDICT_UNKNOWN,
 )
 from threatos.services.url_intel_service import (
-    enrich_url, enrich_url_domain_age, enrich_url_email_auth,
-    enrich_url_phishtank, enrich_url_safe_browsing, enrich_url_sem,
-    enrich_url_spamhaus, enrich_url_surbl, enrich_url_uribl,
+    _classify_outcome, enrich_url, enrich_url_domain_age,
+    enrich_url_email_auth, enrich_url_phishtank, enrich_url_safe_browsing,
+    enrich_url_sem, enrich_url_spamhaus, enrich_url_surbl, enrich_url_uribl,
     enrich_url_urlhaus, enrich_url_urlscan, enrich_url_virustotal,
-    generate_investigation_report, get_investigation, list_investigations,
-    parse_url,
+    generate_investigation_report, get_investigation, get_source_health,
+    list_investigations, parse_url,
 )
 
 
@@ -778,3 +778,99 @@ async def test_list_investigations_most_recent_first(db_session):
 @pytest.mark.asyncio
 async def test_get_investigation_returns_none_when_missing(db_session):
     assert await get_investigation(db_session, "not-a-real-id") is None
+
+
+# ── Source health monitoring ───────────────────────────────────────────────────
+
+def test_classify_outcome_no_key():
+    assert _classify_outcome({"verdict": VERDICT_NO_KEY}) == "no_key"
+
+def test_classify_outcome_error_messages():
+    for message in [
+        "VirusTotal request timed out",
+        "VT API error: HTTP 500",
+        "Spamhaus DNS lookup failed: timeout",
+        "urlscan.io daily quota exceeded",
+        "URIBL public mirror rate-limited this query — try again later",
+        "PhishTank rate limit exceeded — add PHISHTANK_APP_KEY for a higher limit",
+    ]:
+        assert _classify_outcome({"verdict": VERDICT_UNKNOWN, "message": message}) == "error", message
+
+def test_classify_outcome_not_found_is_ok_not_error():
+    # "Not found" is a real, successful response from a working source —
+    # must not be misclassified as an error.
+    for message in [
+        "Not found in URLhaus database",
+        "Domain not found in RDAP (unregistered or unsupported TLD)",
+        "Not found in PhishTank database",
+    ]:
+        assert _classify_outcome({"verdict": VERDICT_UNKNOWN, "message": message}) == "ok", message
+
+def test_classify_outcome_successful_verdict_is_ok():
+    assert _classify_outcome({"verdict": VERDICT_MALICIOUS}) == "ok"
+    assert _classify_outcome({"verdict": VERDICT_CLEAN}) == "ok"
+
+@pytest.mark.asyncio
+async def test_enrich_url_records_source_health_events(db_session):
+    async def fake_ok(*a, **kw): return {"source": "x", "verdict": VERDICT_CLEAN}
+    async def fake_no_key(*a, **kw): return {"source": "x", "verdict": VERDICT_NO_KEY,
+                                              "message": "no key"}
+    async def fake_error(*a, **kw): return {"source": "x", "verdict": VERDICT_UNKNOWN,
+                                             "message": "PhishTank request timed out"}
+
+    with patch("threatos.services.url_intel_service.enrich_url_virustotal", fake_ok), \
+         patch("threatos.services.url_intel_service.enrich_url_urlscan", fake_ok), \
+         patch("threatos.services.url_intel_service.enrich_url_spamhaus", fake_ok), \
+         patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake_no_key), \
+         patch("threatos.services.url_intel_service.enrich_url_domain_age", fake_ok), \
+         patch("threatos.services.url_intel_service.enrich_url_safe_browsing", fake_ok), \
+         patch("threatos.services.url_intel_service.enrich_url_surbl", fake_ok), \
+         patch("threatos.services.url_intel_service.enrich_url_phishtank", fake_error), \
+         patch("threatos.services.url_intel_service.enrich_url_uribl", fake_ok), \
+         patch("threatos.services.url_intel_service.enrich_url_sem", fake_ok), \
+         patch("threatos.services.url_intel_service.enrich_url_email_auth", fake_ok):
+        await enrich_url(db_session, "https://health-check.example")
+
+    health = await get_source_health(db_session)
+    by_source = {h["source"]: h for h in health}
+
+    assert by_source["phishtank"]["errors"] == 1
+    assert by_source["urlhaus"]["no_key"] == 1
+    assert by_source["virustotal"]["ok"] == 1
+
+@pytest.mark.asyncio
+async def test_get_source_health_flags_degraded_source(db_session):
+    async def fake_error(*a, **kw): return {"source": "x", "verdict": VERDICT_UNKNOWN,
+                                             "message": "PhishTank request timed out"}
+    async def fake_ok(*a, **kw): return {"source": "x", "verdict": VERDICT_CLEAN}
+
+    with patch("threatos.services.url_intel_service.enrich_url_virustotal", fake_ok), \
+         patch("threatos.services.url_intel_service.enrich_url_urlscan", fake_ok), \
+         patch("threatos.services.url_intel_service.enrich_url_spamhaus", fake_ok), \
+         patch("threatos.services.url_intel_service.enrich_url_urlhaus", fake_ok), \
+         patch("threatos.services.url_intel_service.enrich_url_domain_age", fake_ok), \
+         patch("threatos.services.url_intel_service.enrich_url_safe_browsing", fake_ok), \
+         patch("threatos.services.url_intel_service.enrich_url_surbl", fake_ok), \
+         patch("threatos.services.url_intel_service.enrich_url_phishtank", fake_error), \
+         patch("threatos.services.url_intel_service.enrich_url_uribl", fake_ok), \
+         patch("threatos.services.url_intel_service.enrich_url_sem", fake_ok), \
+         patch("threatos.services.url_intel_service.enrich_url_email_auth", fake_ok):
+        # Below min_samples (5) — should stay "healthy" even though 100% error.
+        for i in range(4):
+            await enrich_url(db_session, f"https://under-threshold-{i}.example")
+        health = {h["source"]: h for h in await get_source_health(db_session)}
+        assert health["phishtank"]["status"] == "healthy"
+
+        # One more call crosses min_samples with a 100% error rate — degraded.
+        await enrich_url(db_session, "https://over-threshold.example")
+        health = {h["source"]: h for h in await get_source_health(db_session)}
+        assert health["phishtank"]["status"] == "degraded"
+        assert health["phishtank"]["last_error_message"] == "PhishTank request timed out"
+        # A consistently healthy source stays healthy.
+        assert health["virustotal"]["status"] == "healthy"
+
+@pytest.mark.asyncio
+async def test_get_source_health_no_data_for_unchecked_source(db_session):
+    health = {h["source"]: h for h in await get_source_health(db_session)}
+    assert health["virustotal"]["status"] == "no_data"
+    assert health["virustotal"]["total_checks"] == 0

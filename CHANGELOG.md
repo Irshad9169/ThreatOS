@@ -4,6 +4,19 @@ All notable changes to ThreatOS are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/), grouped by date rather than
 semantic version since this project doesn't yet cut versioned releases.
 
+## 2026-09-18 — URL Scanner source health monitoring
+
+### Added
+- Per-source health tracking for the URL Scanner (`source_health_events`
+  table, migration 009): every investigation logs each source's outcome
+  (ok / no key configured / error). `GET /api/url-intel/health` reports,
+  per source over the last 7 days, total checks and error rate, flagging
+  a source "degraded" once it has 5+ checks and a ≥50% error rate.
+- Source Health panel on the URL Scanner page — a status dot per source,
+  refreshing automatically, so a provider silently tightening its policy
+  (as PhishTank did) shows up as a red indicator instead of only being
+  noticed via bad investigation results.
+
 ## 2026-09-18 — CI pipeline
 
 ### Added

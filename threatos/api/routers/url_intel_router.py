@@ -9,7 +9,8 @@ from threatos.models.ti_enrichment import TIEnrichment
 from threatos.models.user import User
 from threatos.services.audit_service import Action, Resource, audit
 from threatos.services.url_intel_service import (
-    enrich_url, get_investigation, get_key_status, list_investigations,
+    enrich_url, get_investigation, get_key_status, get_source_health,
+    list_investigations,
 )
 
 router = APIRouter()
@@ -74,6 +75,19 @@ async def investigation_detail(
         "investigated_by": record.investigated_by,
         "investigated_at": record.investigated_at.isoformat(),
     }
+
+@router.get("/health")
+async def source_health(
+    window_days: int = Query(7, ge=1, le=90),
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Per-source health for the last `window_days` — lets a silently degraded
+    external dependency (e.g. a provider tightening its auth policy) show up
+    as a rising error rate instead of being discovered via bad results.
+    """
+    return await get_source_health(db, window_days=window_days)
 
 @router.get("/stats")
 async def url_intel_stats(

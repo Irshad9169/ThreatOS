@@ -688,6 +688,19 @@ Investigation History table on the URL Scanner page lists past scans with
 a "View Report" button that re-displays the saved report instantly,
 without re-querying any external source.
 
+### Source Health Monitoring
+Every investigation logs a per-source outcome (`source_health_events`
+table) — ok / no key configured / error. A source with a high error rate
+over the last 7 days (5+ checks, ≥50% errors) shows as "degraded" in the
+Source Health panel at the bottom of the URL Scanner page, so a provider
+silently tightening its API policy (this happened with PhishTank) shows
+up as a red indicator instead of only being noticed when an analyst gets
+bad results.
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8001/api/url-intel/health?window_days=7"
+```
+
 ---
 
 ## Purple Team Validation

@@ -129,6 +129,17 @@ async def test_investigate_writes_audit_log_entry(test_client: AsyncClient, db_s
 
 
 @pytest.mark.asyncio
+async def test_health_endpoint_reports_all_sources(test_client: AsyncClient):
+    resp = await test_client.get("/api/url-intel/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    sources = {h["source"] for h in data}
+    assert "virustotal" in sources
+    assert "phishtank" in sources
+    assert all(h["status"] == "no_data" for h in data)  # nothing investigated yet in this test
+
+
+@pytest.mark.asyncio
 async def test_stats_reports_key_configuration(test_client: AsyncClient):
     resp = await test_client.get("/api/url-intel/stats")
     assert resp.status_code == 200
